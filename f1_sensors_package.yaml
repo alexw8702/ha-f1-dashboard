@@ -1,0 +1,256 @@
+# =============================================================
+#  F1 Dashboard – Sensoren-Package
+#  Ablage: /config/packages/f1_dashboard.yaml
+#  Voraussetzung in configuration.yaml:
+#     homeassistant:
+#       packages: !include_dir_named packages
+#
+#  Datenquellen (kostenlos, kein API-Key):
+#   - Jolpica-F1 (Ergast-kompatibel): Standings, Kalender, Ergebnisse
+#   - Open-Meteo: Wetter (taeglich + stuendlich) am Circuit
+# =============================================================
+
+rest:
+  # -----------------------------------------------------------
+  # 1) FAHRERWERTUNG
+  # -----------------------------------------------------------
+  - resource: "https://api.jolpi.ca/ergast/f1/current/driverStandings.json"
+    scan_interval: 3600
+    timeout: 30
+    headers:
+      User-Agent: "HomeAssistant-F1-Dashboard/1.0"
+    sensor:
+      - name: "F1 Fahrerwertung"
+        unique_id: f1_driver_standings
+        icon: mdi:racing-helmet
+        value_template: >-
+          {% set s = value_json.MRData.StandingsTable.StandingsLists %}
+          {% if s | length > 0 and s[0].DriverStandings | length > 0 %}
+            {{ s[0].DriverStandings[0].Driver.givenName }} {{ s[0].DriverStandings[0].Driver.familyName }}
+          {% else %}Keine Daten{% endif %}
+        json_attributes_path: "$.MRData.StandingsTable.StandingsLists[0]"
+        json_attributes:
+          - season
+          - round
+          - DriverStandings
+
+  # -----------------------------------------------------------
+  # 2) KONSTRUKTEURSWERTUNG
+  # -----------------------------------------------------------
+  - resource: "https://api.jolpi.ca/ergast/f1/current/constructorStandings.json"
+    scan_interval: 3600
+    timeout: 30
+    headers:
+      User-Agent: "HomeAssistant-F1-Dashboard/1.0"
+    sensor:
+      - name: "F1 Konstrukteurswertung"
+        unique_id: f1_constructor_standings
+        icon: mdi:car-sports
+        value_template: >-
+          {% set s = value_json.MRData.StandingsTable.StandingsLists %}
+          {% if s | length > 0 and s[0].ConstructorStandings | length > 0 %}
+            {{ s[0].ConstructorStandings[0].Constructor.name }}
+          {% else %}Keine Daten{% endif %}
+        json_attributes_path: "$.MRData.StandingsTable.StandingsLists[0]"
+        json_attributes:
+          - season
+          - round
+          - ConstructorStandings
+
+  # -----------------------------------------------------------
+  # 3) RENNKALENDER (enthaelt alle Session-Zeiten)
+  # -----------------------------------------------------------
+  - resource: "https://api.jolpi.ca/ergast/f1/current.json"
+    scan_interval: 21600
+    timeout: 30
+    headers:
+      User-Agent: "HomeAssistant-F1-Dashboard/1.0"
+    sensor:
+      - name: "F1 Rennkalender"
+        unique_id: f1_race_calendar
+        icon: mdi:calendar-star
+        value_template: >-
+          {{ value_json.MRData.RaceTable.Races | length }}
+        json_attributes_path: "$.MRData.RaceTable"
+        json_attributes:
+          - season
+          - Races
+
+  # -----------------------------------------------------------
+  # 4) LETZTES ERGEBNIS
+  # -----------------------------------------------------------
+  - resource: "https://api.jolpi.ca/ergast/f1/current/last/results.json"
+    scan_interval: 3600
+    timeout: 30
+    headers:
+      User-Agent: "HomeAssistant-F1-Dashboard/1.0"
+    sensor:
+      - name: "F1 Letztes Ergebnis"
+        unique_id: f1_last_result
+        icon: mdi:flag-checkered
+        value_template: >-
+          {% set r = value_json.MRData.RaceTable.Races %}
+          {% if r | length > 0 %}{{ r[0].raceName }}{% else %}Keine Daten{% endif %}
+        json_attributes_path: "$.MRData.RaceTable.Races[0]"
+        json_attributes:
+          - season
+          - round
+          - raceName
+          - Results
+
+  # -----------------------------------------------------------
+  # 5) LETZTES QUALIFYING
+  # -----------------------------------------------------------
+  - resource: "https://api.jolpi.ca/ergast/f1/current/last/qualifying.json"
+    scan_interval: 3600
+    timeout: 30
+    headers:
+      User-Agent: "HomeAssistant-F1-Dashboard/1.0"
+    sensor:
+      - name: "F1 Letztes Qualifying"
+        unique_id: f1_last_qualifying
+        icon: mdi:timer-outline
+        value_template: >-
+          {% set r = value_json.MRData.RaceTable.Races %}
+          {% if r | length > 0 %}{{ r[0].raceName }}{% else %}Keine Daten{% endif %}
+        json_attributes_path: "$.MRData.RaceTable.Races[0]"
+        json_attributes:
+          - season
+          - round
+          - raceName
+          - QualifyingResults
+
+  # -----------------------------------------------------------
+  # 6) WETTER (Open-Meteo) – taeglich + stuendlich in EINEM Call
+  #    Koordinaten dynamisch aus sensor.f1_session_status.
+  # -----------------------------------------------------------
+  - resource_template: >-
+      {% set loc = state_attr('sensor.f1_session_status','next_race') %}
+      {% if loc and loc.Circuit and loc.Circuit.Location %}
+        https://api.open-meteo.com/v1/forecast?latitude={{ loc.Circuit.Location.lat }}&longitude={{ loc.Circuit.Location.long }}&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max,weather_code&hourly=temperature_2m,precipitation_probability,weather_code,wind_speed_10m&timezone=UTC&forecast_days=16
+      {% else %}
+        https://api.open-meteo.com/v1/forecast?latitude=0&longitude=0&daily=temperature_2m_max&forecast_days=1
+      {% endif %}
+    scan_interval: 3600
+    timeout: 30
+    headers:
+      User-Agent: "HomeAssistant-F1-Dashboard/1.0"
+    sensor:
+      - name: "F1 Wetter Vorhersage"
+        unique_id: f1_weather_forecast
+        icon: mdi:weather-partly-cloudy
+        value_template: >-
+          {% if value_json.daily is defined %}
+            {{ value_json.daily.temperature_2m_max[0] }}
+          {% else %}unknown{% endif %}
+        unit_of_measurement: "°C"
+        json_attributes_path: "$.daily"
+        json_attributes:
+          - time
+          - temperature_2m_max
+          - temperature_2m_min
+          - precipitation_probability_max
+          - weather_code
+      - name: "F1 Wetter Stuendlich"
+        unique_id: f1_weather_hourly
+        icon: mdi:weather-partly-cloudy
+        value_template: >-
+          {% if value_json.hourly is defined %}ok{% else %}unknown{% endif %}
+        json_attributes_path: "$.hourly"
+        json_attributes:
+          - time
+          - temperature_2m
+          - precipitation_probability
+          - weather_code
+          - wind_speed_10m
+
+# =============================================================
+#  TEMPLATE-SENSOR: Session-Status + naechstes Rennen
+#  Leitet Status (idle/upcoming/active) und next_race komplett
+#  aus dem Jolpica-Kalender ab – kein weiterer API-Call noetig.
+# =============================================================
+template:
+  - trigger:
+      - platform: time_pattern
+        minutes: "/5"
+      - platform: homeassistant
+        event: start
+      - platform: state
+        entity_id: sensor.f1_rennkalender
+    sensor:
+      - name: "F1 Session Status"
+        unique_id: f1_session_status
+        icon: mdi:flag-checkered
+        state: >-
+          {% set races = state_attr('sensor.f1_rennkalender','Races') %}
+          {% if not races %}unknown
+          {% else %}
+            {% set ns = namespace(state='idle', found=false) %}
+            {% set now = utcnow() %}
+            {% for race in races %}
+              {% if not ns.found %}
+                {% set sessions = [] %}
+                {% set sessions = sessions + [race.date ~ 'T' ~ (race.time | default('00:00:00Z'))] %}
+                {% for key in ['FirstPractice','SecondPractice','ThirdPractice','SprintQualifying','Sprint','Qualifying'] %}
+                  {% if race[key] is defined and race[key].date is defined %}
+                    {% set sessions = sessions + [race[key].date ~ 'T' ~ (race[key].time | default('00:00:00Z'))] %}
+                  {% endif %}
+                {% endfor %}
+                {% set raceEnd = as_datetime(race.date ~ 'T' ~ (race.time | default('00:00:00Z'))) + timedelta(hours=3) %}
+                {% if now <= raceEnd %}
+                  {% set ns.found = true %}
+                  {% set ns.state = 'upcoming' %}
+                  {% for s in sessions %}
+                    {% set sdt = as_datetime(s) %}
+                    {% if now >= sdt and now <= sdt + timedelta(hours=2) %}
+                      {% set ns.state = 'active' %}
+                    {% endif %}
+                  {% endfor %}
+                {% endif %}
+              {% endif %}
+            {% endfor %}
+            {{ ns.state }}
+          {% endif %}
+        attributes:
+          next_race: >-
+            {% set races = state_attr('sensor.f1_rennkalender','Races') %}
+            {% if not races %}{{ None | tojson }}
+            {% else %}
+              {% set ns = namespace(next=None, found=false) %}
+              {% set now = utcnow() %}
+              {% for race in races %}
+                {% if not ns.found %}
+                  {% set raceEnd = as_datetime(race.date ~ 'T' ~ (race.time | default('00:00:00Z'))) + timedelta(hours=3) %}
+                  {% if now <= raceEnd %}
+                    {% set ns.found = true %}
+                    {% set ns.next = race %}
+                  {% endif %}
+                {% endif %}
+              {% endfor %}
+              {{ ns.next | tojson }}
+            {% endif %}
+          active_session: >-
+            {% set races = state_attr('sensor.f1_rennkalender','Races') %}
+            {% if not races %}{{ None }}
+            {% else %}
+              {% set ns = namespace(label=None, found=false) %}
+              {% set now = utcnow() %}
+              {% for race in races %}
+                {% if not ns.found %}
+                  {% set raceEnd = as_datetime(race.date ~ 'T' ~ (race.time | default('00:00:00Z'))) + timedelta(hours=3) %}
+                  {% if now <= raceEnd %}
+                    {% set ns.found = true %}
+                    {% set labels = {'FirstPractice':'FP1','SecondPractice':'FP2','ThirdPractice':'FP3','SprintQualifying':'Sprint-Quali','Sprint':'Sprint','Qualifying':'Quali'} %}
+                    {% for key, lbl in labels.items() %}
+                      {% if race[key] is defined and race[key].date is defined %}
+                        {% set sdt = as_datetime(race[key].date ~ 'T' ~ (race[key].time | default('00:00:00Z'))) %}
+                        {% if now >= sdt and now <= sdt + timedelta(hours=2) %}{% set ns.label = lbl %}{% endif %}
+                      {% endif %}
+                    {% endfor %}
+                    {% set rdt = as_datetime(race.date ~ 'T' ~ (race.time | default('00:00:00Z'))) %}
+                    {% if now >= rdt and now <= rdt + timedelta(hours=3) %}{% set ns.label = 'Rennen' %}{% endif %}
+                  {% endif %}
+                {% endif %}
+              {% endfor %}
+              {{ ns.label }}
+            {% endif %}
