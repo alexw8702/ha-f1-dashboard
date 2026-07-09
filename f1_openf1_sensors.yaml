@@ -1,0 +1,111 @@
+# =============================================================
+#  F1 Dashboard – OpenF1-Erweiterung (Letztes Rennen)
+#  Ablage: /config/packages/f1_openf1.yaml
+#  Datenquelle: OpenF1 (https://openf1.org), kostenlos, kein Key.
+#  Historische Daten (Sessions >30min nach Sessionende) sind frei.
+#
+#  Architektur:
+#   OpenF1 liefert rohe JSON-ARRAYS (nicht in ein Objekt verpackt).
+#   HA's REST-Sensor (json_attributes_path) kann nur Objekte in
+#   Attribute uebernehmen, keine rohen Arrays. Daher nutzen wir
+#   rest_command + Trigger-Template-Sensoren (action -> response_
+#   variable), die Arrays direkt und ohne Limit als Attribut
+#   akzeptieren.
+# =============================================================
+
+# -----------------------------------------------------------
+# REST-Commands: rufen OpenF1 auf, liefern volle Antwort
+# (inkl. Arrays) als response_variable in den Sensoren unten.
+# -----------------------------------------------------------
+rest_command:
+  f1_openf1_get_session:
+    url: >-
+      {% set season = state_attr('sensor.f1_letztes_ergebnis','season') %}
+      {% set races = state_attr('sensor.f1_rennkalender','Races') %}
+      {% set last = state_attr('sensor.f1_letztes_ergebnis','raceName') %}
+      {% set ns = namespace(race_date=none) %}
+      {% if races %}
+        {% for r in races %}
+          {% if r.raceName == last and ns.race_date is none %}
+            {% set ns.race_date = r.date %}
+          {% endif %}
+        {% endfor %}
+      {% endif %}
+      {% if season and ns.race_date %}
+        https://api.openf1.org/v1/sessions?year={{ season }}&session_name=Race&date_start>={{ ns.race_date }}&date_start<={{ ns.race_date }}T23:59:59
+      {% else %}
+        https://api.openf1.org/v1/sessions?session_key=0
+      {% endif %}
+    method: GET
+    headers:
+      User-Agent: "HomeAssistant-F1-Dashboard/1.0"
+    timeout: 30
+
+  f1_openf1_get_result:
+    url: "https://api.openf1.org/v1/session_result?session_key={{ session_key }}"
+    method: GET
+    headers:
+      User-Agent: "HomeAssistant-F1-Dashboard/1.0"
+    timeout: 30
+
+  f1_openf1_get_stints:
+    url: "https://api.openf1.org/v1/stints?session_key={{ session_key }}"
+    method: GET
+    headers:
+      User-Agent: "HomeAssistant-F1-Dashboard/1.0"
+    timeout: 30
+
+  f1_openf1_get_pit:
+    url: "https://api.openf1.org/v1/pit?session_key={{ session_key }}"
+    method: GET
+    headers:
+      User-Agent: "HomeAssistant-F1-Dashboard/1.0"
+    timeout: 30
+
+# -----------------------------------------------------------
+# Trigger-Template-Sensor: fuehrt die rest_commands verkettet
+# aus (Session-Key -> Ergebnis/Stints/Pit) und speichert die
+# vollen Arrays als Attribute. Laeuft alle 30 Minuten sowie
+# beim HA-Start.
+# -----------------------------------------------------------
+template:
+  - trigger:
+      - platform: time_pattern
+        minutes: "/30"
+      - platform: homeassistant
+        event: start
+    action:
+      - action: rest_command.f1_openf1_get_session
+        response_variable: session_resp
+      - variables:
+          session_list: "{{ session_resp['content'] | default([]) }}"
+          session_key: >-
+            {{ (session_list[0].session_key if session_list | length > 0 else 0) }}
+      - action: rest_command.f1_openf1_get_result
+        data:
+          session_key: "{{ session_key }}"
+        response_variable: result_resp
+      - action: rest_command.f1_openf1_get_stints
+        data:
+          session_key: "{{ session_key }}"
+        response_variable: stints_resp
+      - action: rest_command.f1_openf1_get_pit
+        data:
+          session_key: "{{ session_key }}"
+        response_variable: pit_resp
+    sensor:
+      - name: "F1 OpenF1 Letztes Rennen"
+        unique_id: f1_openf1_race_recap
+        icon: mdi:flag-checkered
+        state: >-
+          {% set results = result_resp['content'] | default([]) %}
+          {{ results | length }}
+        attributes:
+          session_key: "{{ session_key }}"
+          circuit_short_name: >-
+            {{ session_list[0].circuit_short_name if session_list | length > 0 else '' }}
+          country_name: >-
+            {{ session_list[0].country_name if session_list | length > 0 else '' }}
+          results: "{{ result_resp['content'] | default([]) | tojson }}"
+          stints: "{{ stints_resp['content'] | default([]) | tojson }}"
+          pit_stops: "{{ pit_resp['content'] | default([]) | tojson }}"
