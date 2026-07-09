@@ -37,6 +37,13 @@
 
   const TROPHY_SVG = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" style="vertical-align:-1px;margin-right:2px"><path d="M7 4h10v3a5 5 0 0 1-10 0V4z" fill="#ffd24a"/><path d="M7 4H4a3 3 0 0 0 3 5M17 4h3a3 3 0 0 1-3 5" stroke="#ffd24a" stroke-width="1.4" fill="none"/><path d="M10 13v3h4v-3M9 20h6M12 16v4" stroke="#ffd24a" stroke-width="1.4"/></svg>';
 
+  /* ---- Reifenmischungs-Farben (offizielle F1-Konvention) ---- */
+  const TYRE_COLORS = {
+    SOFT: "#ED1131", MEDIUM: "#F4C61A", HARD: "#E6E6E6",
+    INTERMEDIATE: "#3FA34D", WET: "#1868DB",
+  };
+
+
   const BASE_STYLE = `:host{display:block}*{box-sizing:border-box}.card{background:linear-gradient(160deg,#15151c 0%,#1e1e28 100%);border-radius:18px;padding:18px 18px 16px;color:#f3f4f7;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;box-shadow:0 8px 28px rgba(0,0,0,.38);position:relative;overflow:hidden}.card::before{content:"";position:absolute;inset:0 0 auto 0;height:3px;background:linear-gradient(90deg,#ED1131,#F47600,#00D7B6,#4781D7);opacity:.9}.head{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}.title{font-size:1.02rem;font-weight:700;letter-spacing:.4px}.subtitle{font-size:.72rem;color:#9a9fa8;margin-top:2px;letter-spacing:.3px}.tag{font-size:.62rem;font-weight:700;text-transform:uppercase;letter-spacing:.8px;padding:4px 9px;border-radius:999px;background:rgba(255,255,255,.07);color:#c9cdd4}`;
 
 
