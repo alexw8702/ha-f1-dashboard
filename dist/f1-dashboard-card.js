@@ -599,6 +599,176 @@
     }
   }
 
+  /* ==========================================================
+     3) LETZTES RENNEN  ·  f1-race-recap-card
+     Datenquelle: OpenF1 (historisch, kostenlos, kein Key)
+     Config:
+       entity:         sensor.f1_openf1_letztes_rennen (Pflicht)
+       drivers_entity: sensor.f1_fahrerwertung (optional, fuer Namen)
+     ========================================================== */
+  class F1RaceRecapCard extends HTMLElement {
+    setConfig(config) {
+      if (!config.entity) throw new Error("f1-race-recap-card: 'entity' ist erforderlich");
+      this._config = Object.assign({}, config);
+      this._built = false;
+    }
+    set hass(hass) { this._hass = hass; this._render(); }
+    getCardSize() { return 6; }
+
+    _driverMap() {
+      const map = {};
+      if (this._config.drivers_entity && this._hass) {
+        const st = this._hass.states[this._config.drivers_entity];
+        const rows = (st && st.attributes.DriverStandings) || [];
+        for (const r of rows) {
+          const num = r.Driver && r.Driver.permanentNumber;
+          if (num) {
+            map[num] = {
+              code: (r.Driver.code || "").toUpperCase(),
+              name: `${r.Driver.givenName || ""} ${r.Driver.familyName || ""}`.trim(),
+              teamId: (r.Constructors && r.Constructors[0] && r.Constructors[0].constructorId) || "",
+            };
+          }
+        }
+      }
+      return map;
+    }
+
+    _parseJsonAttr(raw) {
+      if (!raw) return [];
+      if (Array.isArray(raw)) return raw;
+      try { return JSON.parse(raw); } catch (e) { return []; }
+    }
+
+    _render() {
+      if (!this._hass || !this._config) return;
+      if (!this._built) this._build();
+      const st = this._hass.states[this._config.entity];
+      if (!st) {
+        this._body.innerHTML = `<div class="empty">Sensor ${this._config.entity} nicht gefunden</div>`;
+        return;
+      }
+      const results = this._parseJsonAttr(st.attributes.results);
+      const stints = this._parseJsonAttr(st.attributes.stints);
+      const pits = this._parseJsonAttr(st.attributes.pit_stops);
+      const circuitName = st.attributes.circuit_short_name || "";
+      const countryName = st.attributes.country_name || "";
+
+      if (!results.length) {
+        this._body.innerHTML = `<div class="empty">Noch keine Daten zum letzten Rennen</div>`;
+        return;
+      }
+
+      const dmap = this._driverMap();
+      const sorted = [...results].sort((a, b) => (a.position || 99) - (b.position || 99));
+
+      let rows = "";
+      for (const r of sorted) {
+        const num = String(r.driver_number);
+        const info = dmap[num] || { code: num, name: `#${num}`, teamId: "" };
+        const col = teamColor(info.teamId);
+        const driverStints = stints.filter((s) => String(s.driver_number) === num)
+          .sort((a, b) => (a.stint_number || 0) - (b.stint_number || 0));
+        const driverPits = pits.filter((p) => String(p.driver_number) === num);
+
+        let statusHtml = "";
+        if (r.dsq) statusHtml = `<span class="status dsq">DSQ</span>`;
+        else if (r.dnf) statusHtml = `<span class="status dnf">DNF</span>`;
+        else if (r.dns) statusHtml = `<span class="status dns">DNS</span>`;
+        else {
+          const gap = r.gap_to_leader;
+          statusHtml = r.position === 1
+            ? `<span class="gap leader">Sieger</span>`
+            : `<span class="gap">${typeof gap === "number" ? "+" + gap.toFixed(1) + "s" : gap || ""}</span>`;
+        }
+
+        const stintsHtml = driverStints.map((s) => {
+          const cc = TYRE_COLORS[s.compound] || "#8A8F98";
+          const laps = (s.lap_end || 0) - (s.lap_start || 0) + 1;
+          return `<span class="tyre" style="background:${cc}" title="${s.compound} · Runde ${s.lap_start}-${s.lap_end}">${laps}</span>`;
+        }).join("");
+
+        const pitsHtml = driverPits.length
+          ? `<span class="pitcount" title="${driverPits.map((p) => (p.stop_duration != null ? p.stop_duration.toFixed(1) + "s" : "")).join(", ")}">${driverPits.length}&times; Box</span>`
+          : "";
+
+        rows += `
+          <div class="row">
+            <div class="pos">${r.position || "-"}</div>
+            <div class="accent" style="background:${col}"></div>
+            <div class="info">
+              <div class="line1">
+                <span class="name">${info.name || info.code}</span>
+                ${statusHtml}
+              </div>
+              <div class="strategy">
+                <span class="tyres">${stintsHtml}</span>
+                ${pitsHtml}
+              </div>
+            </div>
+          </div>`;
+      }
+
+      this._body.innerHTML = `
+        <div class="gp">
+          <div class="gpname">${circuitName}</div>
+          <div class="gploc">${countryName}</div>
+        </div>
+        <div class="rows">${rows}</div>
+        <div class="legend">
+          <span class="lgi"><span class="tyre" style="background:${TYRE_COLORS.SOFT}"></span>Soft</span>
+          <span class="lgi"><span class="tyre" style="background:${TYRE_COLORS.MEDIUM}"></span>Medium</span>
+          <span class="lgi"><span class="tyre" style="background:${TYRE_COLORS.HARD}"></span>Hard</span>
+          <span class="lgi"><span class="tyre" style="background:${TYRE_COLORS.INTERMEDIATE}"></span>Inter</span>
+          <span class="lgi"><span class="tyre" style="background:${TYRE_COLORS.WET}"></span>Wet</span>
+        </div>`;
+    }
+
+    _build() {
+      const root = this.attachShadow({ mode: "open" });
+      root.innerHTML = `
+        <style>${BASE_STYLE}
+          .gp{margin-bottom:12px}
+          .gpname{font-size:1.1rem;font-weight:800}
+          .gploc{font-size:.74rem;color:#9a9fa8;margin-top:2px}
+          .rows{display:flex;flex-direction:column;gap:2px}
+          .row{display:grid;grid-template-columns:26px 4px 1fr;align-items:center;gap:9px;padding:7px 4px;border-radius:10px}
+          .row:hover{background:rgba(255,255,255,.04)}
+          .pos{font-size:.92rem;font-weight:800;text-align:center;color:#e6e8ec;font-variant-numeric:tabular-nums}
+          .accent{width:4px;height:30px;border-radius:4px}
+          .info{min-width:0}
+          .line1{display:flex;align-items:center;justify-content:space-between;gap:8px}
+          .name{font-size:.86rem;font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+          .status{font-size:.6rem;font-weight:800;letter-spacing:.4px;padding:2px 6px;border-radius:6px;flex:none}
+          .status.dnf{background:rgba(237,17,49,.16);color:#ff6b81}
+          .status.dsq{background:rgba(237,17,49,.28);color:#ff8a97}
+          .status.dns{background:rgba(139,144,152,.2);color:#9096a0}
+          .gap{font-size:.68rem;color:#9096a0;font-variant-numeric:tabular-nums;flex:none}
+          .gap.leader{color:#00D7B6;font-weight:700}
+          .strategy{display:flex;align-items:center;gap:6px;margin-top:4px}
+          .tyres{display:flex;gap:3px}
+          .tyre{display:inline-flex;align-items:center;justify-content:center;min-width:16px;height:16px;border-radius:4px;font-size:.55rem;font-weight:800;color:rgba(0,0,0,.55);padding:0 3px}
+          .pitcount{font-size:.6rem;color:#7ab0ff;background:rgba(122,176,255,.1);padding:1px 6px;border-radius:6px;flex:none}
+          .empty{padding:20px 6px;color:#9096a0;font-size:.86rem;text-align:center}
+          .legend{display:flex;flex-wrap:wrap;gap:10px;margin-top:12px;padding-top:10px;border-top:1px solid rgba(255,255,255,.06)}
+          .lgi{display:flex;align-items:center;gap:4px;font-size:.62rem;color:#9096a0}
+          .lgi .tyre{min-width:10px;height:10px;padding:0}
+        </style>
+        <div class="card">
+          <div class="head">
+            <div>
+              <div class="title">Letztes Rennen</div>
+              <div class="subtitle">Ergebnis &middot; Reifen &middot; Boxenstopps</div>
+            </div>
+            <div class="tag">OpenF1</div>
+          </div>
+          <div class="body"></div>
+        </div>`;
+      this._body = root.querySelector(".body");
+      this._built = true;
+    }
+  }
+
   /* ---- Registrierung (Bundle: 3 Karten) --------------------- */
   if (!customElements.get("f1-drivers-card")) customElements.define("f1-drivers-card", F1DriversCard);
   if (!customElements.get("f1-constructors-card")) customElements.define("f1-constructors-card", F1ConstructorsCard);
