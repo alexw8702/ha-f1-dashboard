@@ -773,6 +773,7 @@
   if (!customElements.get("f1-drivers-card")) customElements.define("f1-drivers-card", F1DriversCard);
   if (!customElements.get("f1-constructors-card")) customElements.define("f1-constructors-card", F1ConstructorsCard);
   if (!customElements.get("f1-session-card")) customElements.define("f1-session-card", F1SessionCard);
+  if (!customElements.get("f1-race-recap-card")) customElements.define("f1-race-recap-card", F1RaceRecapCard);
 
   window.customCards = window.customCards || [];
   window.customCards.push(
