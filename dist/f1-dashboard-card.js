@@ -779,7 +779,8 @@
   window.customCards.push(
     { type: "f1-drivers-card", name: "F1 Fahrerwertung", description: "F1 Fahrer-Weltmeisterschaft mit Teamfarben, Details & Wikipedia-Link", preview: false, documentationURL: "https://github.com/alexw8702/ha-f1-dashboard" },
     { type: "f1-constructors-card", name: "F1 Konstrukteurswertung", description: "F1 Konstrukteurs-Weltmeisterschaft mit Teamfarben & Details", preview: false, documentationURL: "https://github.com/alexw8702/ha-f1-dashboard" },
-    { type: "f1-session-card", name: "F1 Rennwochenende", description: "Streckenlayout, Fakten, Countdown, Zeitplan & Wetter", preview: false, documentationURL: "https://github.com/alexw8702/ha-f1-dashboard" }
+    { type: "f1-session-card", name: "F1 Rennwochenende", description: "Streckenlayout, Fakten, Countdown, Zeitplan & Wetter", preview: false, documentationURL: "https://github.com/alexw8702/ha-f1-dashboard" },
+    { type: "f1-race-recap-card", name: "F1 Letztes Rennen", description: "Ergebnis, Reifenstrategie & Boxenstopps (OpenF1)", preview: false, documentationURL: "https://github.com/alexw8702/ha-f1-dashboard" }
   );
 
   console.info("%c F1-DASHBOARD-CARD %c v0.0.2 ",
