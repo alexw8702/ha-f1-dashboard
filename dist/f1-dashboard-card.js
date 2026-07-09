@@ -375,7 +375,7 @@
         </div>`;
     }
 
-    /* --- Wetter rendern: 4-Tage-Leiste + stuendlicher Renntag --- */
+    /* --- Wetter rendern: 3-Tage-Leiste (Rennwochenende) + stuendlicher Renntag --- */
     _renderWeather(next) {
       let daysHtml = "";
       if (this._config.weather_entity) {
@@ -388,8 +388,15 @@
           const codes = wst.attributes.weather_code || [];
           let startIdx = 0;
           const raceIdx = next.date ? times.indexOf(next.date) : -1;
-          if (raceIdx >= 0) startIdx = Math.max(0, Math.min(raceIdx - 1, times.length - 4));
-          const endIdx = Math.min(startIdx + 4, times.length);
+          if (raceIdx >= 0) {
+            // Rennwochenende exakt: vom ersten Sessiontag (i.d.R. Freitag)
+            // bis zum Renntag (Sonntag). Faellt auf Renntag-2 zurueck,
+            // falls keine frueheren Sessions im next-Objekt stehen.
+            const firstSessionDate = next.FirstPractice && next.FirstPractice.date;
+            const weekendStartIdx = firstSessionDate ? times.indexOf(firstSessionDate) : -1;
+            startIdx = weekendStartIdx >= 0 ? weekendStartIdx : Math.max(0, raceIdx - 2);
+          }
+          const endIdx = raceIdx >= 0 ? raceIdx + 1 : Math.min(startIdx + 3, times.length);
           let cells = "";
           for (let i = startIdx; i < endIdx; i++) {
             if (tmax[i] == null) continue;
@@ -547,7 +554,7 @@
           /* Wetter */
           .weather{margin-top:16px}
           .wtitle{font-size:.66rem;text-transform:uppercase;letter-spacing:.8px;color:#9096a0;margin-bottom:8px}
-          .wdays{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+          .wdays{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
           .wday{background:rgba(255,255,255,.04);border-radius:10px;padding:8px 4px;text-align:center;border:1px solid rgba(255,255,255,.05)}
           .wday.raceday{background:rgba(237,17,49,.1);border-color:rgba(237,17,49,.25)}
           .wdlabel{font-size:.62rem;color:#9096a0;text-transform:uppercase}
