@@ -35,6 +35,9 @@ async def async_setup_entry(
         F1WeatherDailySensor(coordinator, entry),
         F1WeatherHourlySensor(coordinator, entry),
         F1RaceRecapSensor(coordinator, entry),
+        F1LiveTimingTowerSensor(coordinator, entry),
+        F1LiveTrackStatusSensor(coordinator, entry),
+        F1LiveRaceControlSensor(coordinator, entry),
     ]
     async_add_entities(entities)
 
@@ -280,3 +283,106 @@ class F1RaceRecapSensor(_F1BaseSensor):
             "stints": recap.get("stints", []),
             "pit_stops": recap.get("pit_stops", []),
         }
+
+
+class _F1LiveBaseSensor(SensorEntity):
+    """Basis fuer Live-Sensoren: reagiert auf Push-Updates vom
+    F1LiveDataManager statt auf den regulaeren Coordinator-Poll-Zyklus.
+
+    Live-Daten aendern sich potenziell mehrmals pro Sekunde waehrend
+    einer Session; das Standard-Coordinator-Polling (stuendlich) ist
+    dafuer ungeeignet. Der Manager ruft stattdessen bei jeder neuen
+    Nachricht einen Listener auf, der die Entity zum Aktualisieren
+    veranlasst.
+    """
+
+    _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_should_poll = False
+
+    def __init__(
+        self, coordinator: F1DashboardCoordinator, entry: ConfigEntry, key: str, name: str
+    ) -> None:
+        self._coordinator = coordinator
+        self._key = key
+        self._attr_unique_id = f"{entry.entry_id}_{key}"
+        self._attr_name = name
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, entry.entry_id)},
+            "name": "F1 Dashboard",
+            "manufacturer": "Jolpica-F1 / Open-Meteo / OpenF1 / F1 Live Timing",
+            "model": "Formel-1-Datenintegration",
+        }
+        self._unsub_live: Any = None
+
+    async def async_added_to_hass(self) -> None:
+        self._unsub_live = self._coordinator.live.add_listener(
+            self._handle_live_update
+        )
+
+    async def async_will_remove_from_hass(self) -> None:
+        if self._unsub_live is not None:
+            self._unsub_live()
+
+    def _handle_live_update(self) -> None:
+        self.async_write_ha_state()
+
+    @property
+    def available(self) -> bool:
+        # Waehrend keine Session laeuft, sind Live-Sensoren bewusst
+        # "unavailable" statt einen veralteten letzten Stand zu zeigen.
+        return self._coordinator.live.is_active
+
+
+class F1LiveTimingTowerSensor(_F1LiveBaseSensor):
+    """Live-Positionen, Rundenzeiten und Gaps waehrend einer Session."""
+
+    _attr_icon = "mdi:podium"
+
+    def __init__(self, coordinator: F1DashboardCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry, "live_timing_tower", "Live Timing Tower")
+
+    @property
+    def native_value(self) -> int:
+        return len(self._coordinator.live.timing_tower)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {"drivers": self._coordinator.live.timing_tower}
+
+
+class F1LiveTrackStatusSensor(_F1LiveBaseSensor):
+    """Aktueller Streckenstatus (gruen/gelb/Safety Car/rot) waehrend einer Session."""
+
+    _attr_icon = "mdi:flag-variant"
+
+    def __init__(self, coordinator: F1DashboardCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry, "live_track_status", "Live Streckenstatus")
+
+    @property
+    def native_value(self) -> str | None:
+        return self._coordinator.live.track_status.get("label")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return dict(self._coordinator.live.track_status)
+
+
+class F1LiveRaceControlSensor(_F1LiveBaseSensor):
+    """Juengste Renn-Kontrollnachrichten (Strafen, Untersuchungen, Flaggen)."""
+
+    _attr_icon = "mdi:message-alert"
+
+    def __init__(self, coordinator: F1DashboardCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry, "live_race_control", "Live Renn-Kontrolle")
+
+    @property
+    def native_value(self) -> str | None:
+        messages = self._coordinator.live.race_control_messages
+        if not messages:
+            return None
+        return messages[-1].get("Message", "")[:255]
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {"messages": self._coordinator.live.race_control_messages}
