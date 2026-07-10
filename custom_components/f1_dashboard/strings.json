@@ -1,0 +1,28 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Set up F1 Dashboard",
+        "description": "Free, key-less Formula 1 data (Jolpica-F1, Open-Meteo, OpenF1). No account or credentials needed.",
+        "data": {
+          "enable_weather": "Enable weather forecast",
+          "enable_race_recap": "Enable last-race recap (results, tyre strategy, pit stops)"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "F1 Dashboard is already set up."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "F1 Dashboard options",
+        "data": {
+          "enable_weather": "Enable weather forecast",
+          "enable_race_recap": "Enable last-race recap (results, tyre strategy, pit stops)"
+        }
+      }
+    }
+  }
+}
