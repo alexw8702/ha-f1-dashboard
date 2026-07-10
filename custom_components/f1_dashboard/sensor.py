@@ -388,3 +388,32 @@ class F1LiveRaceControlSensor(_F1LiveBaseSensor):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         return {"messages": self._coordinator.live.race_control_messages}
+
+class F1LiveTrackPositionsSensor(_F1LiveBaseSensor):
+    """Live-Fahrzeugpositionen (X/Y) fuer die Streckenkarte.
+
+    Attribut-Payload ist bewusst kompakt (nur Nummer, Kuerzel, Farbe,
+    Koordinaten, Status) und vom Recorder ausgenommen: die Positionen
+    aendern sich sekuendlich und haben historisch keinen Wert.
+    """
+
+    _attr_icon = "mdi:map-marker-path"
+    _unrecorded_attributes = frozenset({"positions", "bounds"})
+
+    def __init__(self, coordinator: F1DashboardCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(
+            coordinator, entry, "live_track_positions", "Live Track Positionen"
+        )
+
+    @property
+    def native_value(self) -> int:
+        return len(self._coordinator.live.get_track_positions())
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        live = self._coordinator.live
+        return {
+            "positions": live.get_track_positions(),
+            "bounds": live.position_bounds,
+            "track_status": live.track_status.get("status"),
+        }
