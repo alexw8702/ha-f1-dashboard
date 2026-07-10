@@ -159,6 +159,7 @@ class F1LastResultSensor(_F1BaseSensor):
             "season": data.get("season"),
             "round": data.get("round"),
             "raceName": data.get("raceName"),
+            "date": data.get("date"),
             "Results": data.get("Results", []),
         }
 
