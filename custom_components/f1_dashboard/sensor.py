@@ -38,6 +38,7 @@ async def async_setup_entry(
         F1LiveTimingTowerSensor(coordinator, entry),
         F1LiveTrackStatusSensor(coordinator, entry),
         F1LiveRaceControlSensor(coordinator, entry),
+        F1LiveTrackPositionsSensor(coordinator, entry),
     ]
     async_add_entities(entities)
 
