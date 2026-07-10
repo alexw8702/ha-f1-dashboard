@@ -34,6 +34,12 @@ Formel-1-Daten für Home Assistant, komplett kostenlos ohne API-Key. Alle Sensor
 - Reifenstrategie je Fahrer (Compound-Farbcodierung nach offizieller F1-Konvention)
 - Boxenstopp-Anzahl und -Dauer je Fahrer
 
+**Live-Timing (nur während aktiver Sessions)**
+- Kompletter Timing Tower: Position, Team-Farbe, Gap, letzte Rundenzeit, Box-/Out-Status
+- Live-Streckenstatus (Grün/Gelb/Safety Car/Rot)
+- Aktuelle Renn-Kontrollnachrichten (Flaggen, Strafen, Untersuchungen)
+- Datenquelle: der offizielle F1-Live-Timing-Feed per WebSocket, automatischer Start/Stop je nach Session-Status
+
 ---
 
 ## Installation
