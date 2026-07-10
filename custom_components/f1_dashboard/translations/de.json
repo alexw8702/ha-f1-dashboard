@@ -1,0 +1,28 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "F1 Dashboard einrichten",
+        "description": "Kostenlose Formel-1-Daten ohne API-Key (Jolpica-F1, Open-Meteo, OpenF1). Kein Konto oder Zugangsdaten noetig.",
+        "data": {
+          "enable_weather": "Wettervorhersage aktivieren",
+          "enable_race_recap": "Rueckblick letztes Rennen aktivieren (Ergebnis, Reifenstrategie, Boxenstopps)"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "F1 Dashboard ist bereits eingerichtet."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "F1-Dashboard-Optionen",
+        "data": {
+          "enable_weather": "Wettervorhersage aktivieren",
+          "enable_race_recap": "Rueckblick letztes Rennen aktivieren (Ergebnis, Reifenstrategie, Boxenstopps)"
+        }
+      }
+    }
+  }
+}
