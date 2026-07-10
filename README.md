@@ -82,6 +82,11 @@ Falls du kein HACS für Integrationen nutzen willst, kannst du stattdessen [`f1_
 | `sensor.f1_dashboard_wetter_vorhersage` | Tageswetter am nächsten Circuit |
 | `sensor.f1_dashboard_wetter_stuendlich` | Stündliches Wetter am nächsten Circuit |
 | `sensor.f1_dashboard_letztes_rennen_detail` | Ergebnis, Reifen, Boxenstopps (OpenF1) |
+| `sensor.f1_dashboard_live_timing_tower` | Live-Positionen, Gaps, Rundenzeiten – nur während einer laufenden Session |
+| `sensor.f1_dashboard_live_streckenstatus` | Live-Streckenstatus (Grün/Gelb/Safety Car/Rot) – nur während einer laufenden Session |
+| `sensor.f1_dashboard_live_renn_kontrolle` | Aktuelle Renn-Kontrollnachrichten (Flaggen, Strafen) – nur während einer laufenden Session |
+
+> Die drei Live-Sensoren beziehen Daten vom offiziellen F1-Live-Timing-Feed per WebSocket und sind ausserhalb aktiver Sessions bewusst `unavailable`, statt veraltete Daten zu zeigen.
 
 > Die exakte Entity-ID kann je nach vorhandenen Entities leicht abweichen (Home Assistant hängt bei Kollisionen `_2` etc. an) – im Zweifel unter *Entwicklerwerkzeuge → Zustände* nach „F1 Dashboard" filtern.
 
