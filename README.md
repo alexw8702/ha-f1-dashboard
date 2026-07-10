@@ -1,12 +1,11 @@
 # F1 Dashboard
 
 [![HACS Custom](https://img.shields.io/badge/HACS-Custom-orange.svg?style=for-the-badge)](https://github.com/hacs/integration)
-[![Add Repo](https://img.shields.io/badge/HACS-Repo%20hinzuf%C3%BCgen-41BDF5.svg?style=for-the-badge)](https://my.home-assistant.io/redirect/hacs_repository/?owner=alexw8702&repository=ha-f1-dashboard&category=plugin)
+[![Add Repo](https://img.shields.io/badge/HACS-Repo%20hinzuf%C3%BCgen-41BDF5.svg?style=for-the-badge)](https://my.home-assistant.io/redirect/hacs_repository/?owner=alexw8702&repository=ha-f1-dashboard&category=integration)
 
-Formel-1-Daten und -Dashboard für Home Assistant, komplett kostenlos ohne API-Key. Zwei Teile:
+Formel-1-Daten für Home Assistant, komplett kostenlos ohne API-Key. Alle Sensoren, per UI eingerichtet – kein YAML-Editieren nötig.
 
-- **F1 Dashboard** (HACS-Kategorie *Integration*) – alle Sensoren, per UI eingerichtet
-- **F1 Dashboard Card** (HACS-Kategorie *Dashboard/Plugin*) – vier eigenständige Custom Cards
+> **Hinweis:** Die passenden Dashboard-Karten leben in einem separaten Repo: [**ha-f1-dashboard-card**](https://github.com/alexw8702/ha-f1-dashboard-card) (HACS-Kategorie *Dashboard/Plugin*). Beide Repos werden getrennt installiert, da HACS pro Repo nur eine Kategorie gleichzeitig verwaltet.
 
 | Karte | Element | Zeigt |
 |-------|---------|-------|
