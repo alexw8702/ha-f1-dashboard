@@ -5,6 +5,10 @@ Ein zentraler Coordinator pollt alle Datenquellen in einem Zyklus:
   - Open-Meteo: Wetter am naechsten Circuit (taeglich + stuendlich)
   - OpenF1: Ergebnis/Reifen/Boxenstopps des letzten Rennens (historisch)
 
+Zusaetzlich verwaltet er den F1LiveDataManager, der waehrend aktiver
+Sessions eine WebSocket-Verbindung zum offiziellen F1-Live-Timing-Feed
+haelt (Timing Tower, Streckenstatus, Race Control).
+
 Das ersetzt die vormals verkettete REST-Sensor/rest_command-YAML-Logik
 durch einen einzigen, nativen Update-Zyklus.
 """
@@ -18,6 +22,7 @@ import aiohttp
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from . import api
@@ -26,6 +31,7 @@ from .const import (
     CONF_ENABLE_WEATHER,
     UPDATE_INTERVAL_STANDINGS,
 )
+from .live_manager import F1LiveDataManager
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -38,6 +44,10 @@ SESSION_DEFS = [
     ("Sprint", "Sprint"),
     ("Qualifying", "Quali"),
 ]
+
+# Die Live-Verbindung muss deutlich schneller reagieren als der stuendliche
+# Haupt-Poll-Zyklus, damit sie zeitnah zu Sessionbeginn/-ende startet/stoppt.
+_LIVE_CHECK_INTERVAL = timedelta(minutes=1)
 
 
 class F1DashboardCoordinator(DataUpdateCoordinator[dict[str, Any]]):
@@ -52,11 +62,38 @@ class F1DashboardCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         self._options = options
         self._session = async_get_clientsession(hass)
+        self.live = F1LiveDataManager(hass)
+        self._cached_session_status: dict[str, Any] = {
+            "state": "idle", "next_race": None, "active_session": None,
+        }
+        self._unsub_live_check = async_track_time_interval(
+            hass, self._async_check_live_status, _LIVE_CHECK_INTERVAL
+        )
+        self.live.add_listener(self.async_update_listeners)
 
     async def async_shutdown(self) -> None:
+        if self._unsub_live_check is not None:
+            self._unsub_live_check()
+        await self.live.async_shutdown()
         # Die von async_get_clientsession bereitgestellte Session gehoert
         # Home Assistant und wird zentral verwaltet - kein eigenes Schliessen.
         await super().async_shutdown()
+
+    async def _async_check_live_status(self, _now: datetime | None = None) -> None:
+        """Prueft unabhaengig vom Haupt-Poll, ob die Live-Verbindung an/aus soll.
+
+        Der Rennkalender selbst aendert sich kaum, daher reicht es, ihn nur
+        stuendlich neu abzurufen - aber der Session-Status (idle/upcoming/
+        active) haengt von der aktuellen Uhrzeit ab und muss deutlich
+        oefter neu berechnet werden, damit die Live-Verbindung zeitnah zu
+        Sessionbeginn startet statt erst beim naechsten Stunden-Poll.
+        """
+        if self.data is not None:
+            calendar = self.data.get("calendar", {})
+            self._cached_session_status = self._compute_session_status(calendar)
+
+        should_be_active = self._cached_session_status.get("state") == "active"
+        await self.live.async_set_active(should_be_active)
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Ruft alle Datenquellen ab und baut das kombinierte Datenmodell."""
@@ -74,6 +111,7 @@ class F1DashboardCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             raise UpdateFailed(f"Jolpica-F1-Abruf fehlgeschlagen: {err}") from err
 
         result["session_status"] = self._compute_session_status(result["calendar"])
+        self._cached_session_status = result["session_status"]
 
         if self._options.get(CONF_ENABLE_WEATHER, True):
             try:
