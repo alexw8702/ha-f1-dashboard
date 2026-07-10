@@ -1,0 +1,186 @@
+"""DataUpdateCoordinator fuer die F1-Dashboard-Integration.
+
+Ein zentraler Coordinator pollt alle Datenquellen in einem Zyklus:
+  - Jolpica-F1: Standings, Kalender, letztes Ergebnis/Qualifying
+  - Open-Meteo: Wetter am naechsten Circuit (taeglich + stuendlich)
+  - OpenF1: Ergebnis/Reifen/Boxenstopps des letzten Rennens (historisch)
+
+Das ersetzt die vormals verkettete REST-Sensor/rest_command-YAML-Logik
+durch einen einzigen, nativen Update-Zyklus.
+"""
+from __future__ import annotations
+
+import logging
+from datetime import datetime, timedelta, timezone
+from typing import Any
+
+import aiohttp
+
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+
+from . import api
+from .const import (
+    CONF_ENABLE_RACE_RECAP,
+    CONF_ENABLE_WEATHER,
+    UPDATE_INTERVAL_STANDINGS,
+)
+
+_LOGGER = logging.getLogger(__name__)
+
+# Session-Reihenfolge fuer Zeitplan-Aufbau (Jolpica-Schluessel -> Label)
+SESSION_DEFS = [
+    ("FirstPractice", "FP1"),
+    ("SecondPractice", "FP2"),
+    ("ThirdPractice", "FP3"),
+    ("SprintQualifying", "Sprint-Quali"),
+    ("Sprint", "Sprint"),
+    ("Qualifying", "Quali"),
+]
+
+
+class F1DashboardCoordinator(DataUpdateCoordinator[dict[str, Any]]):
+    """Koordiniert alle F1-Dashboard-Datenabrufe in einem Zyklus."""
+
+    def __init__(self, hass: HomeAssistant, options: dict[str, Any]) -> None:
+        super().__init__(
+            hass,
+            _LOGGER,
+            name="F1 Dashboard",
+            update_interval=UPDATE_INTERVAL_STANDINGS,
+        )
+        self._options = options
+        self._session = async_get_clientsession(hass)
+
+    async def async_shutdown(self) -> None:
+        # Die von async_get_clientsession bereitgestellte Session gehoert
+        # Home Assistant und wird zentral verwaltet - kein eigenes Schliessen.
+        await super().async_shutdown()
+
+    async def _async_update_data(self) -> dict[str, Any]:
+        """Ruft alle Datenquellen ab und baut das kombinierte Datenmodell."""
+        result: dict[str, Any] = {}
+
+        try:
+            result["driver_standings"] = await api.async_get_driver_standings(self._session)
+            result["constructor_standings"] = await api.async_get_constructor_standings(
+                self._session
+            )
+            result["calendar"] = await api.async_get_race_calendar(self._session)
+            result["last_result"] = await api.async_get_last_result(self._session)
+            result["last_qualifying"] = await api.async_get_last_qualifying(self._session)
+        except api.F1ApiError as err:
+            raise UpdateFailed(f"Jolpica-F1-Abruf fehlgeschlagen: {err}") from err
+
+        result["session_status"] = self._compute_session_status(result["calendar"])
+
+        if self._options.get(CONF_ENABLE_WEATHER, True):
+            try:
+                result["weather"] = await self._async_get_weather_for_next_race(
+                    result["session_status"]
+                )
+            except api.F1ApiError as err:
+                _LOGGER.warning("Wetterabruf fehlgeschlagen: %s", err)
+                result["weather"] = None
+
+        if self._options.get(CONF_ENABLE_RACE_RECAP, True):
+            try:
+                result["race_recap"] = await self._async_get_race_recap(result["last_result"])
+            except api.F1ApiError as err:
+                _LOGGER.warning("OpenF1-Rennrueckblick fehlgeschlagen: %s", err)
+                result["race_recap"] = None
+
+        return result
+
+    # -----------------------------------------------------------
+    # Session-Status (idle/upcoming/active) + naechstes Rennen
+    # -----------------------------------------------------------
+    def _compute_session_status(self, calendar: dict[str, Any]) -> dict[str, Any]:
+        races = calendar.get("Races", [])
+        now = datetime.now(timezone.utc)
+
+        for race in races:
+            race_dt = self._parse_session_dt(race.get("date"), race.get("time"))
+            if race_dt is None:
+                continue
+            race_end = race_dt + timedelta(hours=3)
+            if now > race_end:
+                continue
+
+            state = "upcoming"
+            active_session = None
+            for key, label in [*SESSION_DEFS, ("__race__", "Rennen")]:
+                sub = race if key == "__race__" else race.get(key)
+                if not sub or not sub.get("date"):
+                    continue
+                dt = self._parse_session_dt(sub["date"], sub.get("time"))
+                if dt and dt <= now <= dt + timedelta(hours=2):
+                    state = "active"
+                    active_session = label
+
+            return {
+                "state": state,
+                "next_race": race,
+                "active_session": active_session,
+            }
+
+        return {"state": "idle", "next_race": None, "active_session": None}
+
+    @staticmethod
+    def _parse_session_dt(date_str: str | None, time_str: str | None) -> datetime | None:
+        if not date_str:
+            return None
+        time_part = (time_str or "00:00:00Z").replace("Z", "+00:00")
+        try:
+            return datetime.fromisoformat(f"{date_str}T{time_part}")
+        except ValueError:
+            return None
+
+    # -----------------------------------------------------------
+    # Wetter fuer das naechste Rennen
+    # -----------------------------------------------------------
+    async def _async_get_weather_for_next_race(
+        self, session_status: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        next_race = session_status.get("next_race")
+        if not next_race:
+            return None
+        circuit = next_race.get("Circuit", {})
+        location = circuit.get("Location", {})
+        lat, lon = location.get("lat"), location.get("long")
+        if not lat or not lon:
+            return None
+        return await api.async_get_weather(self._session, lat, lon)
+
+    # -----------------------------------------------------------
+    # OpenF1-Rennrueckblick zum letzten Rennen
+    # -----------------------------------------------------------
+    async def _async_get_race_recap(
+        self, last_result: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        season = last_result.get("season")
+        race_date = last_result.get("date")
+        if not season or not race_date:
+            return None
+
+        openf1_session = await api.async_find_race_session(self._session, season, race_date)
+        if not openf1_session:
+            return None
+
+        session_key = openf1_session.get("session_key")
+        if session_key is None:
+            return None
+
+        results = await api.async_get_session_result(self._session, session_key)
+        stints = await api.async_get_stints(self._session, session_key)
+        pit_stops = await api.async_get_pit_stops(self._session, session_key)
+
+        return {
+            "session_key": session_key,
+            "circuit_short_name": openf1_session.get("circuit_short_name"),
+            "country_name": openf1_session.get("country_name"),
+            "results": results,
+            "stints": stints,
+            "pit_stops": pit_stops,
+        }
