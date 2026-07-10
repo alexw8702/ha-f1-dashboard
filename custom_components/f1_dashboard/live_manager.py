@@ -3,11 +3,12 @@
 Startet den F1LiveTimingClient nur waehrend einer aktiven Session
 (gesteuert vom bestehenden session_status) und uebersetzt eingehende
 Rohnachrichten in ein sauberes, direkt nutzbares Datenmodell fuer die
-Sensoren (Timing Tower, Streckenstatus).
+Sensoren (Timing Tower, Streckenstatus, Track-Positionen).
 """
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 from homeassistant.core import HomeAssistant, callback
@@ -29,6 +30,11 @@ TRACK_STATUS_LABELS = {
     "7": "VSC Ende",
 }
 
+# Positions-Updates kommen im Feed gebuendelt etwa im Sekundentakt.
+# Wir benachrichtigen die Sensoren fuer Positionsdaten hoechstens einmal
+# pro Intervall, um die HA-State-Machine nicht zu fluten.
+_POSITION_NOTIFY_INTERVAL = 1.0
+
 
 class F1LiveDataManager:
     """Haelt den aktuellen Live-Zustand und steuert die Verbindung."""
@@ -44,9 +50,12 @@ class F1LiveDataManager:
         self.track_status: dict[str, Any] = {"status": None, "label": None}
         self.race_control_messages: list[dict[str, Any]] = []
         self.session_live_info: dict[str, Any] = {}
+        self.position_bounds: dict[str, float] = {}
 
         self._driver_list: dict[str, dict[str, Any]] = {}
         self._timing_data: dict[str, dict[str, Any]] = {}
+        self._track_positions: dict[str, dict[str, Any]] = {}
+        self._last_position_notify = 0.0
 
     @property
     def is_active(self) -> bool:
@@ -72,8 +81,11 @@ class F1LiveDataManager:
             self.timing_tower = []
             self.track_status = {"status": None, "label": None}
             self.race_control_messages = []
+            self.position_bounds = {}
             self._driver_list = {}
             self._timing_data = {}
+            self._track_positions = {}
+            self._last_position_notify = 0.0
 
         self._notify_listeners()
 
@@ -98,10 +110,37 @@ class F1LiveDataManager:
             await self._client.stop()
             self._client = None
 
+    def get_track_positions(self) -> list[dict[str, Any]]:
+        """Aktuelle Fahrzeugpositionen, angereichert um Fahrer-Infos."""
+        rows = []
+        for num, pos in self._track_positions.items():
+            driver = self._driver_list.get(num, {})
+            rows.append(
+                {
+                    "driver_number": num,
+                    "tla": driver.get("Tla", ""),
+                    "team_colour": driver.get("TeamColour", ""),
+                    "x": pos["x"],
+                    "y": pos["y"],
+                    "status": pos.get("status", ""),
+                }
+            )
+        return rows
+
     # -----------------------------------------------------------
     # Nachrichtenverarbeitung
     # -----------------------------------------------------------
     async def _on_message(self, topic: str, payload: Any) -> None:
+        # Positionsdaten laufen ausserhalb des Timing-Tower-Pfads:
+        # kein Tower-Rebuild noetig und Benachrichtigung gedrosselt.
+        if topic == "Position.z":
+            if self._handle_position(payload):
+                now = time.monotonic()
+                if now - self._last_position_notify >= _POSITION_NOTIFY_INTERVAL:
+                    self._last_position_notify = now
+                    self._notify_listeners()
+            return
+
         handler = {
             "DriverList": self._handle_driver_list,
             "TimingData": self._handle_timing_data,
@@ -114,6 +153,57 @@ class F1LiveDataManager:
             handler(payload)
             self._rebuild_timing_tower()
             self._notify_listeners()
+
+    def _handle_position(self, payload: Any) -> bool:
+        """Verarbeitet einen Position.z-Batch.
+
+        Payload-Struktur (nach Dekompression):
+          {"Position": [{"Timestamp": ..., "Entries": {
+              "1": {"Status": "OnTrack", "X": -1073, "Y": -2836, "Z": 187},
+              ...
+          }}, ...]}
+
+        Ein Batch enthaelt mehrere Samples; wir uebernehmen nur das
+        juengste. Eintraege mit X=0 und Y=0 (Garage/kein Signal) werden
+        ignoriert, damit sie weder Karte noch Bounds verzerren.
+        """
+        if not isinstance(payload, dict):
+            return False
+        samples = payload.get("Position")
+        if not isinstance(samples, list) or not samples:
+            return False
+        entries = samples[-1].get("Entries")
+        if not isinstance(entries, dict):
+            return False
+
+        changed = False
+        for num, pos in entries.items():
+            if not isinstance(pos, dict):
+                continue
+            x, y = pos.get("X"), pos.get("Y")
+            if not isinstance(x, (int, float)) or not isinstance(y, (int, float)):
+                continue
+            if x == 0 and y == 0:
+                continue
+
+            self._track_positions[num] = {
+                "x": x,
+                "y": y,
+                "status": pos.get("Status", ""),
+            }
+            self._update_bounds(x, y)
+            changed = True
+        return changed
+
+    def _update_bounds(self, x: float, y: float) -> None:
+        b = self.position_bounds
+        if not b:
+            self.position_bounds = {"min_x": x, "max_x": x, "min_y": y, "max_y": y}
+            return
+        b["min_x"] = min(b["min_x"], x)
+        b["max_x"] = max(b["max_x"], x)
+        b["min_y"] = min(b["min_y"], y)
+        b["max_y"] = max(b["max_y"], y)
 
     def _handle_driver_list(self, payload: dict[str, Any]) -> None:
         if not isinstance(payload, dict):
