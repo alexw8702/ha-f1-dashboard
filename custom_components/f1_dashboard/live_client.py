@@ -20,14 +20,20 @@ Ablauf:
      Frames vom Typ 1 (Invocation) mit target "feed" enthalten die
      eigentlichen Daten als Argumente [topic, data, timestamp].
 
+Topics mit ".z"-Suffix (z.B. Position.z) sind base64-kodiert und
+raw-DEFLATE-komprimiert; sie werden hier transportnah dekodiert,
+bevor sie an den Manager weitergereicht werden.
+
 Nur waehrend Sessions aktiv (siehe live_manager.py) - ausserhalb
 liefert der Feed ohnehin nichts Sinnvolles.
 """
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
+import zlib
 from collections.abc import Callable, Coroutine
 from typing import Any
 
@@ -39,10 +45,10 @@ _NEGOTIATE_URL = "https://livetiming.formula1.com/signalrcore/negotiate"
 _WS_URL = "wss://livetiming.formula1.com/signalrcore"
 _RECORD_SEPARATOR = "\x1e"
 
-# Topics, die fuer Timing-Tower + Streckenstatus benoetigt werden.
-# Bewusst reduziert gegenueber FastF1s Vollset (kein CarData.z/Position.z
-# Telemetrie-Feuerhose, die wir fuer unseren Anwendungsfall nicht brauchen
-# und die den Coordinator unnoetig belasten wuerde).
+# Topics, die fuer Timing-Tower + Streckenstatus + Track-Map benoetigt
+# werden. Position.z liefert die X/Y-Koordinaten aller Fahrzeuge fuer
+# die Live-Streckenkarte; CarData.z (Telemetrie-Feuerhose mit Speed/
+# RPM/DRS) bleibt bewusst aussen vor, da unnoetig fuer unseren Fall.
 DEFAULT_TOPICS = [
     "Heartbeat",
     "SessionInfo",
@@ -55,10 +61,20 @@ DEFAULT_TOPICS = [
     "WeatherData",
     "DriverList",
     "LapCount",
+    "Position.z",
 ]
 
 _RECONNECT_BASE_DELAY = 5
 _RECONNECT_MAX_DELAY = 60
+
+
+def _inflate_z_payload(data: str) -> Any:
+    """Dekodiert ein ".z"-Topic: base64 -> raw DEFLATE -> JSON.
+
+    Der Feed nutzt DEFLATE ohne zlib-Header, daher wbits=-MAX_WBITS.
+    """
+    raw = zlib.decompress(base64.b64decode(data), -zlib.MAX_WBITS)
+    return json.loads(raw)
 
 
 class F1LiveTimingClient:
@@ -205,6 +221,14 @@ class F1LiveTimingClient:
                 args = data.get("arguments", [])
                 if len(args) >= 2:
                     topic, payload = args[0], args[1]
+                    if topic.endswith(".z") and isinstance(payload, str):
+                        try:
+                            payload = _inflate_z_payload(payload)
+                        except (ValueError, zlib.error) as err:
+                            _LOGGER.debug(
+                                "Dekodierung von %s fehlgeschlagen: %s", topic, err
+                            )
+                            continue
                     try:
                         await self._on_message(topic, payload)
                     except Exception:  # noqa: BLE001
