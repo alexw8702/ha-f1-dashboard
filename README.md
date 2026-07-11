@@ -10,7 +10,7 @@ Formel-1-Daten für Home Assistant, komplett kostenlos ohne API-Key.
 
 > **Hinweis:** Die passenden Dashboard-Karten leben in einem separaten Repo: [**ha-f1-dashboard-card**](https://github.com/alexw8702/ha-f1-dashboard-card) (HACS-Kategorie *Dashboard/Plugin*). Beide Repos werden getrennt installiert, da HACS pro Repo nur eine Kategorie gleichzeitig verwaltet.
 >
-> **Versionsstand:** Integration `v0.4.2` · Card `v0.6.0`. Die Card wurde in v0.4.0 auf Vue 3 umgestellt und die Rennwochenende-Karte neu designt; die hier bereitgestellten Live-Timing-Sensoren (siehe unten) sind aktuell **nicht** in die neu gestaltete Session Card eingebunden, bleiben aber vollständig funktionsfähig für eigene Automationen, Templates oder Custom-Karten.
+> **Versionsstand:** Integration `v0.4.3` · Card `v0.6.0`. Die Card wurde in v0.4.0 auf Vue 3 umgestellt und die Rennwochenende-Karte neu designt; die hier bereitgestellten Live-Timing-Sensoren (siehe unten) sind aktuell **nicht** in die neu gestaltete Session Card eingebunden, bleiben aber vollständig funktionsfähig für eigene Automationen, Templates oder Custom-Karten.
 
 ---
 
@@ -161,6 +161,10 @@ Optionen:
 ---
 
 ## Changelog
+
+### v0.4.3
+- ⚡ **OpenF1-Rennrückblick wird nicht mehr stündlich pauschal neu abgerufen.** Der Abruf erfolgt jetzt nur noch bei der Erstinitialisierung und wenn sich das letzte Rennergebnis oder der Session-Status ändert — vorher wurde die ohnehin rate-limitierte OpenF1-API bei jedem stündlichen Poll-Zyklus erneut abgefragt, auch wenn sich nichts geändert hatte. Schlägt ein Neu-Abruf fehl (z. B. Rate-Limit), bleibt der zuletzt bekannte gute Stand erhalten statt geleert zu werden.
+- ✅ **Testabdeckung auf `config_flow.py` und `__init__.py` erweitert** (Einrichtungsdialog und Setup-/Unload-/Reload-Lebenszyklus) — laut Repo-Review die einzigen beiden Module ohne jegliche Testabdeckung. 20 neue Tests (87 gesamt).
 
 ### v0.4.2
 - 🧹 **Doku-/Code-Aufräumen:** Nie genutzte Konstanten (`UPDATE_INTERVAL_CALENDAR`/`WEATHER`/`OPENF1`) entfernt, die eine granulare Polling-Strategie suggerierten, welche es nie gab (tatsächlich pollt ein einziger Coordinator alles stündlich). Der an Jolpica/OpenF1/Open-Meteo gesendete `User-Agent`-Header war seit dem allerersten Release bei `0.1.0` eingefroren, entspricht jetzt der aktuellen Version. Keine funktionale Änderung.

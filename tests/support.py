@@ -109,8 +109,86 @@ def install_test_stubs() -> None:
 
     components_sensor.SensorEntity = SensorEntity
 
+    # ---- config_entries: ConfigFlow/OptionsFlow-Basisklassen fuer config_flow.py ----
+    class AbortFlow(Exception):
+        """Ersatz fuer homeassistant.data_entry_flow.AbortFlow."""
+
+        def __init__(self, reason: str) -> None:
+            super().__init__(reason)
+            self.reason = reason
+
+    class ConfigFlow:
+        """Minimaler Ersatz: nur die von config_flow.py tatsaechlich genutzten
+        Methoden (async_set_unique_id/_abort_if_unique_id_configured sind No-Ops,
+        da die echte Registry-Logik hier nicht nachgebildet wird - Tests pruefen
+        stattdessen, dass sie aufgerufen werden, per Spy/Patch)."""
+
+        def __init_subclass__(cls, *, domain: str | None = None, **kwargs: Any) -> None:
+            cls._test_domain = domain
+            super().__init_subclass__(**kwargs)
+
+        async def async_set_unique_id(self, unique_id: str) -> None:
+            self._unique_id = unique_id
+
+        def _abort_if_unique_id_configured(self) -> None:
+            return None
+
+        def async_create_entry(self, *, title: str, data: dict[str, Any]) -> dict[str, Any]:
+            return {"type": "create_entry", "title": title, "data": data}
+
+        def async_show_form(self, *, step_id: str, data_schema: Any) -> dict[str, Any]:
+            return {"type": "form", "step_id": step_id, "data_schema": data_schema}
+
+    class OptionsFlow:
+        """Minimaler Ersatz mit denselben Ergebnis-Helfern wie ConfigFlow."""
+
+        def async_create_entry(self, *, title: str, data: dict[str, Any]) -> dict[str, Any]:
+            return {"type": "create_entry", "title": title, "data": data}
+
+        def async_show_form(self, *, step_id: str, data_schema: Any) -> dict[str, Any]:
+            return {"type": "form", "step_id": step_id, "data_schema": data_schema}
+
     config_entries = types.ModuleType("homeassistant.config_entries")
     config_entries.ConfigEntry = ConfigEntry
+    config_entries.ConfigFlow = ConfigFlow
+    config_entries.OptionsFlow = OptionsFlow
+
+    data_entry_flow = types.ModuleType("homeassistant.data_entry_flow")
+    data_entry_flow.AbortFlow = AbortFlow
+    sys.modules.setdefault("homeassistant.data_entry_flow", data_entry_flow)
+
+    # ---- voluptuous: nur Schema()/Required() als durchreichende Marker-Objekte ----
+    # config_flow.py validiert damit nichts inhaltlich in den Tests - die eigentliche
+    # Validierung passiert im echten HA-Frontend. Required() traegt den Default in
+    # einem .default-Attribut, damit Tests pruefen koennen, welche Werte die
+    # Options-Flow-Schema-Defaults tatsaechlich verwenden (siehe test_config_flow.py).
+    voluptuous = types.ModuleType("voluptuous")
+
+    class _RequiredMarker(str):
+        def __new__(cls, key: str, default: Any = None) -> "_RequiredMarker":
+            obj = str.__new__(cls, key)
+            obj.default = default() if callable(default) else default
+            return obj
+
+    class _VolSchema:
+        def __init__(self, schema: dict[Any, Any]) -> None:
+            self.schema = schema
+
+        def __call__(self, data: Any) -> Any:
+            return data
+
+    voluptuous.Schema = _VolSchema
+    voluptuous.Required = _RequiredMarker
+    sys.modules.setdefault("voluptuous", voluptuous)
+
+    # ---- homeassistant.const: nur Platform (fuer __init__.py's PLATFORMS-Liste) ----
+    const_module = types.ModuleType("homeassistant.const")
+
+    class Platform:
+        SENSOR = "sensor"
+
+    const_module.Platform = Platform
+    sys.modules.setdefault("homeassistant.const", const_module)
 
     entity = types.ModuleType("homeassistant.helpers.entity")
 

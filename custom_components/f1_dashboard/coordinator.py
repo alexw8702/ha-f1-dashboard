@@ -66,6 +66,13 @@ class F1DashboardCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._cached_session_status: dict[str, Any] = {
             "state": "idle", "next_race": None, "active_session": None,
         }
+        # OpenF1-Rennrueckblick wird nicht mehr bei jedem stuendlichen Poll-Zyklus neu
+        # abgerufen (unnoetige Last auf einer ohnehin rate-limitierten API, siehe
+        # _async_update_data), sondern nur bei der Erstinitialisierung und wenn sich
+        # entweder das letzte Jolpica-Rennergebnis oder der Session-Status aendert.
+        # None ist der Startwert und erzwingt beim allerersten Refresh immer einen Abruf.
+        self._cached_race_recap: dict[str, Any] | None = None
+        self._race_recap_trigger_key: tuple[Any, ...] | None = None
         self._unsub_live_check = async_track_time_interval(
             hass, self._async_check_live_status, _LIVE_CHECK_INTERVAL
         )
@@ -123,13 +130,57 @@ class F1DashboardCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 result["weather"] = None
 
         if self._options.get(CONF_ENABLE_RACE_RECAP, True):
-            try:
-                result["race_recap"] = await self._async_get_race_recap(result["last_result"])
-            except api.F1ApiError as err:
-                _LOGGER.warning("OpenF1-Rennrueckblick fehlgeschlagen: %s", err)
-                result["race_recap"] = None
+            result["race_recap"] = await self._async_get_race_recap_if_needed(
+                result["last_result"], result["session_status"]
+            )
 
         return result
+
+    def _build_race_recap_trigger_key(
+        self, last_result: dict[str, Any], session_status: dict[str, Any]
+    ) -> tuple[Any, ...]:
+        """Baut den Vergleichsschluessel fuer 'hat sich seit dem letzten Abruf etwas
+        geaendert, das einen neuen OpenF1-Abruf rechtfertigt'.
+
+        Zwei unabhaengige Trigger: das Jolpica-Rennergebnis selbst (season+date - das
+        ist der Schluessel, mit dem der OpenF1-Rennrueckblick ueberhaupt gesucht wird,
+        siehe _async_get_race_recap) und der Session-Status (state+active_session).
+        Letzterer allein waere nicht ausreichend: Status kann ueber zwei aufeinander-
+        folgende Rennen hinweg z.B. beide Male "idle" sein, waehrend last_result sich
+        bereits geaendert hat.
+        """
+        return (
+            last_result.get("season"),
+            last_result.get("date"),
+            session_status.get("state"),
+            session_status.get("active_session"),
+        )
+
+    async def _async_get_race_recap_if_needed(
+        self, last_result: dict[str, Any], session_status: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Ruft den OpenF1-Rennrueckblick nur bei Erstinitialisierung oder einer
+        Aenderung von last_result/session_status ab, sonst wird der zwischengespeicherte
+        Wert wiederverwendet - siehe _cached_race_recap/_race_recap_trigger_key in
+        __init__ fuer die Begruendung (OpenF1 ist rate-limitiert, ein stuendlicher
+        Abruf ohne inhaltlichen Anlass war unnoetige Last).
+        """
+        trigger_key = self._build_race_recap_trigger_key(last_result, session_status)
+        if self._race_recap_trigger_key is not None and trigger_key == self._race_recap_trigger_key:
+            return self._cached_race_recap
+
+        try:
+            recap = await self._async_get_race_recap(last_result)
+        except api.F1ApiError as err:
+            _LOGGER.warning("OpenF1-Rennrueckblick fehlgeschlagen: %s", err)
+            # Bei einem fehlgeschlagenen Abruf den zuletzt bekannten guten Stand
+            # behalten, statt eine funktionierende Anzeige durch einen transienten
+            # Fehler (z.B. OpenF1-Rate-Limit) zu leeren.
+            return self._cached_race_recap
+
+        self._cached_race_recap = recap
+        self._race_recap_trigger_key = trigger_key
+        return recap
 
     # -----------------------------------------------------------
     # Session-Status (idle/upcoming/active) + naechstes Rennen
