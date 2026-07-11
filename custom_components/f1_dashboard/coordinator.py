@@ -224,13 +224,139 @@ class F1DashboardCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             api.async_get_pit_stops, session_key, "Boxenstopps"
         )
 
+        # Fahrer- und Team-Mappings aus den Jolpica-Ergebnissen extrahieren
+        driver_map = {}
+        for r in last_result.get("Results", []):
+            try:
+                num = int(r.get("number", -1))
+                driver_map[num] = {
+                    "name": f"{r.get('Driver', {}).get('givenName', '')} {r.get('Driver', {}).get('familyName', '')}".strip(),
+                    "constructorId": r.get("Constructor", {}).get("constructorId", ""),
+                    "constructorName": r.get("Constructor", {}).get("name", ""),
+                    "position": int(r.get("position", 999))
+                }
+            except (ValueError, TypeError):
+                continue
+
+        # 1) Rennergebnis aufbereiten
+        mapped_results = []
+        for r in (results or []):
+            num = r.get("driver_number")
+            info = driver_map.get(num)
+            if info:
+                name = info["name"]
+                constr_id = info["constructorId"]
+                constr_name = info["constructorName"]
+                pos = info["position"]
+            else:
+                name = f"Driver #{num}"
+                constr_id = ""
+                constr_name = "–"
+                pos = r.get("position", 0)
+
+            gap = r.get("gap_to_leader")
+            if gap == 0 or gap is None:
+                duration = r.get("duration")
+                if duration:
+                    h = int(duration // 3600)
+                    m = int((duration % 3600) // 60)
+                    s = duration % 60
+                    time_str = f"{h}:{m:02d}:{s:06.3f}" if h > 0 else f"{m}:{s:06.3f}"
+                else:
+                    time_str = "Winner"
+            elif isinstance(gap, (int, float)):
+                time_str = f"+{gap:.3f}s"
+            else:
+                time_str = str(gap)
+
+            mapped_results.append({
+                "position": pos,
+                "driver": {"name": name},
+                "constructor": {"name": constr_name, "constructorId": constr_id},
+                "points": int(r.get("points", 0)),
+                "time": time_str,
+            })
+        mapped_results.sort(key=lambda x: x["position"])
+
+        # 2) Reifenstrategie (Stints) gruppieren und aufbereiten
+        driver_stints = {}
+        for s in (stints or []):
+            num = s.get("driver_number")
+            if num not in driver_stints:
+                driver_stints[num] = []
+            driver_stints[num].append(s)
+
+        mapped_stints = []
+        for num, s_list in driver_stints.items():
+            s_list.sort(key=lambda x: x.get("stint_number", 0))
+            compounds = [s.get("compound", "") for s in s_list if s.get("compound")]
+            
+            total_laps = 0
+            if s_list:
+                total_laps = s_list[-1].get("lap_end", 0)
+
+            info = driver_map.get(num)
+            if info:
+                name = info["name"]
+                constr_id = info["constructorId"]
+                pos = info["position"]
+            else:
+                name = f"Driver #{num}"
+                constr_id = ""
+                pos = 999
+
+            mapped_stints.append({
+                "driver": {"name": name},
+                "constructor": {"constructorId": constr_id},
+                "position": pos,
+                "compound": compounds,
+                "laps": total_laps
+            })
+        mapped_stints.sort(key=lambda x: x["position"])
+
+        # 3) Boxenstopps aufbereiten
+        sorted_pits = sorted((pit_stops or []), key=lambda x: (x.get("lap_number", 0), x.get("date", "")))
+        driver_stop_counters = {}
+        mapped_pits = []
+        for p in sorted_pits:
+            num = p.get("driver_number")
+            if num is None:
+                continue
+            driver_stop_counters[num] = driver_stop_counters.get(num, 0) + 1
+            stop_num = driver_stop_counters[num]
+
+            info = driver_map.get(num)
+            name = info["name"] if info else f"Driver #{num}"
+            pos = info["position"] if info else 999
+
+            duration_sec = p.get("stop_duration") or p.get("pit_duration")
+            if duration_sec is not None:
+                duration_str = f"{duration_sec:.2f}s"
+            else:
+                duration_str = "–"
+
+            mapped_pits.append({
+                "driver": {"name": name},
+                "stop": stop_num,
+                "lap": p.get("lap_number", 0),
+                "duration": duration_str,
+                "position": pos
+            })
+        
+        def get_duration_val(x):
+            try:
+                return float(x["duration"].replace("s", ""))
+            except ValueError:
+                return 999.0
+        mapped_pits.sort(key=get_duration_val)
+
         return {
             "session_key": session_key,
             "circuit_short_name": openf1_session.get("circuit_short_name"),
             "country_name": openf1_session.get("country_name"),
-            "results": results,
-            "stints": stints,
-            "pit_stops": pit_stops,
+            "results": mapped_results,
+            "stints": mapped_stints,
+            "pit_stops": mapped_pits,
         }
 
     async def _async_get_openf1_part(

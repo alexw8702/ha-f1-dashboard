@@ -83,10 +83,41 @@ class F1DriverStandingsSensor(_F1BaseSensor):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         data = self.coordinator.data.get("driver_standings", {})
+        driver_standings = data.get("DriverStandings", [])
+        
+        standings = []
+        for item in driver_standings:
+            driver = item.get("Driver", {})
+            constructors = item.get("Constructors", [])
+            constr = constructors[0] if constructors else {}
+            
+            try:
+                pts = float(item.get("points", 0))
+                if pts.is_integer():
+                    pts = int(pts)
+            except (ValueError, TypeError):
+                pts = 0
+                
+            try:
+                wns = int(item.get("wins", 0))
+            except (ValueError, TypeError):
+                wns = 0
+                
+            standings.append({
+                "name": f"{driver.get('givenName', '')} {driver.get('familyName', '')}".strip(),
+                "team": constr.get("name", "–"),
+                "teamId": constr.get("constructorId", ""),
+                "tla": driver.get("code", ""),
+                "points": pts,
+                "wins": wns,
+                "nationality": driver.get("nationality", ""),
+            })
+
         return {
             "season": data.get("season"),
             "round": data.get("round"),
-            "DriverStandings": data.get("DriverStandings", []),
+            "DriverStandings": driver_standings,
+            "standings": standings,
         }
 
     def _rows(self) -> list[dict[str, Any]]:
@@ -111,10 +142,36 @@ class F1ConstructorStandingsSensor(_F1BaseSensor):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         data = self.coordinator.data.get("constructor_standings", {})
+        constructor_standings = data.get("ConstructorStandings", [])
+        
+        standings = []
+        for item in constructor_standings:
+            constr = item.get("Constructor", {})
+            
+            try:
+                pts = float(item.get("points", 0))
+                if pts.is_integer():
+                    pts = int(pts)
+            except (ValueError, TypeError):
+                pts = 0
+                
+            try:
+                wns = int(item.get("wins", 0))
+            except (ValueError, TypeError):
+                wns = 0
+                
+            standings.append({
+                "name": constr.get("name", "–"),
+                "constructorId": constr.get("constructorId", ""),
+                "points": pts,
+                "wins": wns,
+            })
+
         return {
             "season": data.get("season"),
             "round": data.get("round"),
-            "ConstructorStandings": data.get("ConstructorStandings", []),
+            "ConstructorStandings": constructor_standings,
+            "standings": standings,
         }
 
     def _rows(self) -> list[dict[str, Any]]:
