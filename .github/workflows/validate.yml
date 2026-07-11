@@ -37,3 +37,16 @@ jobs:
         run: |
           python -m py_compile custom_components/f1_dashboard/*.py
           echo "Python syntax OK"
+
+  python-tests:
+    name: Run unit test suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Run tests
+        run: |
+          cd tests
+          python -m unittest discover -s . -p "test_*.py" -v
