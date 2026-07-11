@@ -196,7 +196,7 @@ async def async_get_stints(
     session: aiohttp.ClientSession, session_key: int
 ) -> list[dict[str, Any]]:
     """Reifenstrategie fuer eine Session."""
-    data = await _get_json(session, f"{OPENF1_BASE}/stints?session_key={session_key}")
+    data = await _get_json_with_retry(session, f"{OPENF1_BASE}/stints?session_key={session_key}")
     return data or []
 
 
