@@ -19,6 +19,11 @@ _LOGGER = logging.getLogger(__name__)
 _TIMEOUT = 30
 _HEADERS = {"User-Agent": USER_AGENT}
 
+# OpenF1 limitiert Requests strikt und unangekuendigt (429). Ein einzelner
+# Wiederholungsversuch nach kurzer Pause genuegt in aller Regel.
+_RETRYABLE_STATUS = {429}
+_RETRY_DELAY = 2.0
+
 
 class F1ApiError(Exception):
     """Fehler bei einem API-Aufruf."""
