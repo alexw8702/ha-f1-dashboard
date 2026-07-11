@@ -10,7 +10,7 @@ Formel-1-Daten für Home Assistant, komplett kostenlos ohne API-Key.
 
 > **Hinweis:** Die passenden Dashboard-Karten leben in einem separaten Repo: [**ha-f1-dashboard-card**](https://github.com/alexw8702/ha-f1-dashboard-card) (HACS-Kategorie *Dashboard/Plugin*). Beide Repos werden getrennt installiert, da HACS pro Repo nur eine Kategorie gleichzeitig verwaltet.
 >
-> **Versionsstand:** Integration `v0.4.1` · Card `v0.6.0`. Die Card wurde in v0.4.0 auf Vue 3 umgestellt und die Rennwochenende-Karte neu designt; die hier bereitgestellten Live-Timing-Sensoren (siehe unten) sind aktuell **nicht** in die neu gestaltete Session Card eingebunden, bleiben aber vollständig funktionsfähig für eigene Automationen, Templates oder Custom-Karten.
+> **Versionsstand:** Integration `v0.4.2` · Card `v0.6.0`. Die Card wurde in v0.4.0 auf Vue 3 umgestellt und die Rennwochenende-Karte neu designt; die hier bereitgestellten Live-Timing-Sensoren (siehe unten) sind aktuell **nicht** in die neu gestaltete Session Card eingebunden, bleiben aber vollständig funktionsfähig für eigene Automationen, Templates oder Custom-Karten.
 
 ---
 
@@ -161,6 +161,9 @@ Optionen:
 ---
 
 ## Changelog
+
+### v0.4.2
+- 🧹 **Doku-/Code-Aufräumen:** Nie genutzte Konstanten (`UPDATE_INTERVAL_CALENDAR`/`WEATHER`/`OPENF1`) entfernt, die eine granulare Polling-Strategie suggerierten, welche es nie gab (tatsächlich pollt ein einziger Coordinator alles stündlich). Der an Jolpica/OpenF1/Open-Meteo gesendete `User-Agent`-Header war seit dem allerersten Release bei `0.1.0` eingefroren, entspricht jetzt der aktuellen Version. Keine funktionale Änderung.
 
 ### v0.4.1
 - ✅ **CI führt jetzt die Testsuite aus:** Bisher validierte die CI nur die Python-Syntax; die 67 Unit-Tests unter `tests/` liefen nur bei manuellem Aufruf. Neuer CI-Job führt sie bei jedem Push/PR aus. Keine funktionale Änderung an der Integration.
