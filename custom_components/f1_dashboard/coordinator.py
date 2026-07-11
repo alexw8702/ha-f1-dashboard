@@ -210,9 +210,19 @@ class F1DashboardCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if session_key is None:
             return None
 
-        results = await api.async_get_session_result(self._session, session_key)
-        stints = await api.async_get_stints(self._session, session_key)
-        pit_stops = await api.async_get_pit_stops(self._session, session_key)
+        # Jeder Teilaufruf wird einzeln abgesichert: schlaegt z.B. nur
+        # der Boxenstopp-Abruf fehl (OpenF1-Rate-Limit), sollen Ergebnis
+        # und Reifenstrategie trotzdem angezeigt werden, statt den
+        # kompletten Rueckblick zu verwerfen.
+        results = await self._async_get_openf1_part(
+            api.async_get_session_result, session_key, "Ergebnis"
+        )
+        stints = await self._async_get_openf1_part(
+            api.async_get_stints, session_key, "Reifenstrategie"
+        )
+        pit_stops = await self._async_get_openf1_part(
+            api.async_get_pit_stops, session_key, "Boxenstopps"
+        )
 
         return {
             "session_key": session_key,
@@ -222,3 +232,18 @@ class F1DashboardCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "stints": stints,
             "pit_stops": pit_stops,
         }
+
+    async def _async_get_openf1_part(
+        self, fetch_fn: Any, session_key: int, label: str
+    ) -> list[dict[str, Any]]:
+        """Ruft einen einzelnen OpenF1-Teilbereich ab und faengt Fehler lokal ab.
+
+        Gibt bei Fehlschlag eine leere Liste zurueck statt die Exception
+        weiterzureichen, damit ein einzelner ausgelasteter Endpunkt nicht
+        den gesamten Rennrueckblick blockiert.
+        """
+        try:
+            return await fetch_fn(self._session, session_key)
+        except api.F1ApiError as err:
+            _LOGGER.warning("OpenF1 %s nicht verfuegbar: %s", label, err)
+            return []
