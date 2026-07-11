@@ -76,7 +76,6 @@ class F1DashboardCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._unsub_live_check = async_track_time_interval(
             hass, self._async_check_live_status, _LIVE_CHECK_INTERVAL
         )
-        self.live.add_listener(self.async_update_listeners)
 
     async def async_shutdown(self) -> None:
         if self._unsub_live_check is not None:
@@ -94,10 +93,21 @@ class F1DashboardCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         active) haengt von der aktuellen Uhrzeit ab und muss deutlich
         oefter neu berechnet werden, damit die Live-Verbindung zeitnah zu
         Sessionbeginn startet statt erst beim naechsten Stunden-Poll.
+
+        Der neu berechnete Status wird auch in self.data["session_status"]
+        geschrieben (via async_set_updated_data), nicht nur in
+        self._cached_session_status: Ohne das wuerde sensor.f1_dashboard_
+        session_status (liest self.coordinator.data direkt, siehe sensor.py)
+        bis zu 59 Minuten hinter der tatsaechlichen Session zurueckhaengen,
+        obwohl die Live-Verbindung selbst puenktlich startet - der Sensor
+        haette dann von diesem minuetlichen Check gar nichts gehabt.
         """
         if self.data is not None:
             calendar = self.data.get("calendar", {})
             self._cached_session_status = self._compute_session_status(calendar)
+            if self._cached_session_status != self.data.get("session_status"):
+                self.data["session_status"] = self._cached_session_status
+                self.async_set_updated_data(self.data)
 
         should_be_active = self._cached_session_status.get("state") == "active"
         await self.live.async_set_active(should_be_active)
@@ -166,7 +176,10 @@ class F1DashboardCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         Abruf ohne inhaltlichen Anlass war unnoetige Last).
         """
         trigger_key = self._build_race_recap_trigger_key(last_result, session_status)
-        if self._race_recap_trigger_key is not None and trigger_key == self._race_recap_trigger_key:
+        if (
+            self._race_recap_trigger_key is not None
+            and trigger_key == self._race_recap_trigger_key
+        ):
             return self._cached_race_recap
 
         try:
@@ -179,7 +192,19 @@ class F1DashboardCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return self._cached_race_recap
 
         self._cached_race_recap = recap
-        self._race_recap_trigger_key = trigger_key
+        # Den Trigger-Schluessel nur "committen" (und damit kuenftige Abrufe ueberspringen),
+        # wenn tatsaechlich ein Ergebnis vorliegt. OpenF1 hat kurz nach Rennende oft noch
+        # keine oder nur unvollstaendige Daten (Ingestion-Verzoegerung); _async_get_race_recap
+        # wirft dabei keinen Fehler (die Teilabrufe fangen ihre Fehler selbst ab, siehe
+        # _async_get_openf1_part), sondern liefert einfach leere results/stints/pit_stops.
+        # Wuerde man den Trigger-Schluessel trotzdem committen, bliebe die Karte bis zum
+        # naechsten Rennwochenende dauerhaft auf diesem unvollstaendigen Stand haengen, da
+        # last_result/session_status sich bis dahin nicht mehr aendern und so nie wieder ein
+        # neuer Abruf ausgeloest wuerde. Ohne committeten Trigger-Schluessel wird beim naechsten
+        # Poll-Zyklus (stuendlich) automatisch erneut versucht, bis OpenF1 die Daten hat -
+        # genau das Selbstheilungsverhalten, das der alte unbedingte stuendliche Abruf hatte.
+        if recap and recap.get("results"):
+            self._race_recap_trigger_key = trigger_key
         return recap
 
     # -----------------------------------------------------------

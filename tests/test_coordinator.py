@@ -202,6 +202,67 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(dt.minute, 0)
 
 
+class LiveStatusCheckTests(unittest.IsolatedAsyncioTestCase):
+    """_async_check_live_status laeuft minuetlich (siehe __init__), unabhaengig vom
+    stuendlichen Haupt-Poll, und muss sowohl die Live-Verbindung als auch
+    self.data["session_status"] aktuell halten - Sensoren lesen ausschliesslich
+    self.data, nicht self._cached_session_status direkt (siehe sensor.py)."""
+
+    class _FakeLive:
+        def __init__(self) -> None:
+            self.active_calls: list[bool] = []
+
+        async def async_set_active(self, active: bool) -> None:
+            self.active_calls.append(active)
+
+    def setUp(self) -> None:
+        self.coordinator = object.__new__(F1DashboardCoordinator)
+        self.coordinator.live = self._FakeLive()
+        self.coordinator._cached_session_status = {
+            "state": "idle", "next_race": None, "active_session": None,
+        }
+
+    async def test_updates_data_and_notifies_listeners_when_status_changes(self) -> None:
+        calendar = {"Races": [{
+            "date": "2026-05-03", "time": "13:00:00Z",
+            "Qualifying": {"date": "2026-05-02", "time": "12:00:00Z"},
+        }]}
+        self.coordinator.data = {
+            "calendar": calendar,
+            "session_status": {"state": "idle", "next_race": None, "active_session": None},
+        }
+        notified = []
+        self.coordinator.async_update_listeners = lambda: notified.append(self.coordinator.data)
+
+        with patch.object(coordinator_module, "datetime", _FixedDateTime):
+            await self.coordinator._async_check_live_status()
+
+        self.assertEqual(self.coordinator.data["session_status"]["state"], "active")
+        self.assertEqual(self.coordinator.data["session_status"]["active_session"], "Quali")
+        self.assertEqual(len(notified), 1, "async_set_updated_data haette Listener benachrichtigen muessen")
+        self.assertEqual(self.coordinator.live.active_calls, [True])
+
+    async def test_no_listener_notification_when_status_is_unchanged(self) -> None:
+        calendar = {"Races": [{"date": "2026-04-01", "time": "13:00:00Z"}]}
+        unchanged = {"state": "idle", "next_race": None, "active_session": None}
+        self.coordinator.data = {"calendar": calendar, "session_status": dict(unchanged)}
+        notified = []
+        self.coordinator.async_update_listeners = lambda: notified.append(True)
+
+        with patch.object(coordinator_module, "datetime", _FixedDateTime):
+            await self.coordinator._async_check_live_status()
+
+        self.assertEqual(notified, [], "unveraenderter Status haette keine Benachrichtigung ausloesen duerfen")
+        self.assertEqual(self.coordinator.live.active_calls, [False])
+
+    async def test_before_first_refresh_only_toggles_live_connection(self) -> None:
+        self.coordinator.data = None
+
+        await self.coordinator._async_check_live_status()
+
+        self.assertEqual(self.coordinator.live.active_calls, [False])
+
+
 class RaceRecapCachingTests(unittest.IsolatedAsyncioTestCase):
     """Der OpenF1-Rennrueckblick wird nur bei Erstinitialisierung oder einer Aenderung
     von last_result/session_status neu abgerufen (siehe __init__/_async_update_data) -
@@ -218,20 +279,26 @@ class RaceRecapCachingTests(unittest.IsolatedAsyncioTestCase):
     SESSION_STATUS_IDLE = {"state": "idle", "active_session": None}
     SESSION_STATUS_ACTIVE = {"state": "active", "active_session": "Rennen"}
 
+    # Ein "vollstaendiger" Rueckblick braucht mindestens nicht-leere results, damit der
+    # Trigger-Schluessel committed wird (siehe _async_get_race_recap_if_needed) - stints/
+    # pit_stops sind fuer diese Tests irrelevant und werden weggelassen.
+    COMPLETE_RECAP_1 = {"session_key": 1, "results": [{"position": 1}]}
+    COMPLETE_RECAP_2 = {"session_key": 2, "results": [{"position": 1}]}
+
     async def test_first_call_always_fetches_even_without_prior_state(self) -> None:
         with patch.object(
-            self.coordinator, "_async_get_race_recap", new=AsyncMock(return_value={"session_key": 1})
+            self.coordinator, "_async_get_race_recap", new=AsyncMock(return_value=self.COMPLETE_RECAP_1)
         ) as fetch:
             recap = await self.coordinator._async_get_race_recap_if_needed(
                 self.LAST_RESULT, self.SESSION_STATUS_IDLE
             )
 
         fetch.assert_awaited_once()
-        self.assertEqual(recap, {"session_key": 1})
+        self.assertEqual(recap, self.COMPLETE_RECAP_1)
 
     async def test_unchanged_last_result_and_session_status_reuses_cache(self) -> None:
         with patch.object(
-            self.coordinator, "_async_get_race_recap", new=AsyncMock(return_value={"session_key": 1})
+            self.coordinator, "_async_get_race_recap", new=AsyncMock(return_value=self.COMPLETE_RECAP_1)
         ) as fetch:
             await self.coordinator._async_get_race_recap_if_needed(
                 self.LAST_RESULT, self.SESSION_STATUS_IDLE
@@ -241,12 +308,12 @@ class RaceRecapCachingTests(unittest.IsolatedAsyncioTestCase):
             )
 
         fetch.assert_awaited_once()  # kein zweiter Abruf trotz zweitem Aufruf
-        self.assertEqual(second, {"session_key": 1})
+        self.assertEqual(second, self.COMPLETE_RECAP_1)
 
     async def test_session_status_change_triggers_a_new_fetch(self) -> None:
         with patch.object(
             self.coordinator, "_async_get_race_recap",
-            new=AsyncMock(side_effect=[{"session_key": 1}, {"session_key": 2}]),
+            new=AsyncMock(side_effect=[self.COMPLETE_RECAP_1, self.COMPLETE_RECAP_2]),
         ) as fetch:
             await self.coordinator._async_get_race_recap_if_needed(
                 self.LAST_RESULT, self.SESSION_STATUS_IDLE
@@ -256,7 +323,7 @@ class RaceRecapCachingTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(fetch.await_count, 2)
-        self.assertEqual(second, {"session_key": 2})
+        self.assertEqual(second, self.COMPLETE_RECAP_2)
 
     async def test_last_result_change_triggers_a_new_fetch_even_with_unchanged_status(self) -> None:
         # Randfall: state bleibt z.B. "idle" fuer zwei aufeinanderfolgende Rennen,
@@ -264,7 +331,7 @@ class RaceRecapCachingTests(unittest.IsolatedAsyncioTestCase):
         new_last_result = {"season": "2026", "date": "2026-05-17"}
         with patch.object(
             self.coordinator, "_async_get_race_recap",
-            new=AsyncMock(side_effect=[{"session_key": 1}, {"session_key": 2}]),
+            new=AsyncMock(side_effect=[self.COMPLETE_RECAP_1, self.COMPLETE_RECAP_2]),
         ) as fetch:
             await self.coordinator._async_get_race_recap_if_needed(
                 self.LAST_RESULT, self.SESSION_STATUS_IDLE
@@ -274,12 +341,12 @@ class RaceRecapCachingTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(fetch.await_count, 2)
-        self.assertEqual(second, {"session_key": 2})
+        self.assertEqual(second, self.COMPLETE_RECAP_2)
 
     async def test_failed_refetch_falls_back_to_last_known_good_cache(self) -> None:
         with patch.object(
             self.coordinator, "_async_get_race_recap",
-            new=AsyncMock(side_effect=[{"session_key": 1}, api.F1ApiError("HTTP 429")]),
+            new=AsyncMock(side_effect=[self.COMPLETE_RECAP_1, api.F1ApiError("HTTP 429")]),
         ):
             await self.coordinator._async_get_race_recap_if_needed(
                 self.LAST_RESULT, self.SESSION_STATUS_IDLE
@@ -289,7 +356,7 @@ class RaceRecapCachingTests(unittest.IsolatedAsyncioTestCase):
                 self.LAST_RESULT, self.SESSION_STATUS_ACTIVE
             )
 
-        self.assertEqual(second, {"session_key": 1}, "letzter guter Stand haette erhalten bleiben muessen")
+        self.assertEqual(second, self.COMPLETE_RECAP_1, "letzter guter Stand haette erhalten bleiben muessen")
 
     async def test_failed_first_call_returns_none_without_prior_cache(self) -> None:
         with patch.object(
@@ -301,6 +368,61 @@ class RaceRecapCachingTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertIsNone(recap)
+
+    async def test_empty_results_are_not_cached_and_keep_retrying_every_cycle(self) -> None:
+        # Regressionstest: kurz nach Rennende hat OpenF1 haeufig noch keine/unvollstaendige
+        # Daten (Ingestion-Verzoegerung). _async_get_race_recap wirft dabei KEINEN Fehler
+        # (die Teilabrufe fangen ihre eigenen Fehler ab, siehe _async_get_openf1_part),
+        # sondern liefert einfach leere results. Ohne die results-Pruefung wuerde der
+        # Trigger-Schluessel trotzdem committed und die Karte bliebe bis zum naechsten
+        # Rennwochenende auf diesem leeren Stand haengen, da last_result/session_status
+        # sich bis dahin nicht mehr aendern.
+        empty_recap = {"session_key": 1, "results": [], "stints": [], "pit_stops": []}
+        with patch.object(
+            self.coordinator, "_async_get_race_recap",
+            new=AsyncMock(side_effect=[empty_recap, empty_recap, self.COMPLETE_RECAP_1]),
+        ) as fetch:
+            first = await self.coordinator._async_get_race_recap_if_needed(
+                self.LAST_RESULT, self.SESSION_STATUS_IDLE
+            )
+            # last_result/session_status unveraendert - trotzdem erneuter Abruf, weil der
+            # vorherige Versuch keine results geliefert hat (Trigger-Schluessel nicht committed).
+            second = await self.coordinator._async_get_race_recap_if_needed(
+                self.LAST_RESULT, self.SESSION_STATUS_IDLE
+            )
+            third = await self.coordinator._async_get_race_recap_if_needed(
+                self.LAST_RESULT, self.SESSION_STATUS_IDLE
+            )
+            # Jetzt liegen results vor -> ab hier darf der Cache greifen.
+            fourth = await self.coordinator._async_get_race_recap_if_needed(
+                self.LAST_RESULT, self.SESSION_STATUS_IDLE
+            )
+
+        self.assertEqual(fetch.await_count, 3, "vierter Aufruf haette aus dem Cache bedient werden muessen")
+        self.assertEqual(first, empty_recap)
+        self.assertEqual(second, empty_recap)
+        self.assertEqual(third, self.COMPLETE_RECAP_1)
+        self.assertEqual(fourth, self.COMPLETE_RECAP_1)
+
+    async def test_recap_without_results_key_is_treated_as_incomplete(self) -> None:
+        # last_result ohne Season/Datum (z.B. ganz frueh in der Saison) laesst
+        # _async_get_race_recap None zurueckgeben - auch das darf den Trigger-Schluessel
+        # nicht committen, sonst bleibt "kein Rueckblick" dauerhaft eingefroren, sobald
+        # doch noch ein Rennen stattfindet und last_result sich eigentlich aendert... aber
+        # in diesem Test bleibt last_result absichtlich gleich, um nur die Cache-Bedingung
+        # fuer recap=None zu pruefen.
+        with patch.object(
+            self.coordinator, "_async_get_race_recap",
+            new=AsyncMock(side_effect=[None, None]),
+        ) as fetch:
+            await self.coordinator._async_get_race_recap_if_needed(
+                {}, self.SESSION_STATUS_IDLE
+            )
+            await self.coordinator._async_get_race_recap_if_needed(
+                {}, self.SESSION_STATUS_IDLE
+            )
+
+        self.assertEqual(fetch.await_count, 2, "recap=None haette nie gecached werden duerfen")
 
 
 if __name__ == "__main__":

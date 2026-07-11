@@ -74,6 +74,10 @@ def install_test_stubs() -> None:
         def async_update_listeners(self) -> None:
             return None
 
+        def async_set_updated_data(self, data: dict[str, Any]) -> None:
+            self.data = data
+            self.async_update_listeners()
+
         async def async_shutdown(self) -> None:
             return None
 
