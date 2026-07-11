@@ -178,7 +178,7 @@ async def async_find_race_session(
         f"{OPENF1_BASE}/sessions?year={year}&session_name=Race"
         f"&date_start>={race_date}&date_start<={race_date}T23:59:59"
     )
-    data = await _get_json(session, url)
+    data = await _get_json_with_retry(session, url)
     if not data:
         return None
     return data[0]
