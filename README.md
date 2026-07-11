@@ -6,7 +6,7 @@
 
 Formel-1-Daten für Home Assistant, komplett kostenlos ohne API-Key.
 
-![F1 Dashboard Integration Logo](brand/icon.svg)
+![F1 Dashboard Banner](brand/banner.jpg)
 
 > **Hinweis:** Die passenden Dashboard-Karten leben in einem separaten Repo: [**ha-f1-dashboard-card**](https://github.com/alexw8702/ha-f1-dashboard-card) (HACS-Kategorie *Dashboard/Plugin*). Beide Repos werden getrennt installiert, da HACS pro Repo nur eine Kategorie gleichzeitig verwaltet.
 >
