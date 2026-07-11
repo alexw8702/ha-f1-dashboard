@@ -5,3 +5,17 @@ node_modules/
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# AI-related files
+CLAUDE.md
+.gemini/
+.claude/
+.codex/
+
+# Credentials and secrets
+.env
+.env.*
+*.key
+*.pem
+.git-credentials
+
