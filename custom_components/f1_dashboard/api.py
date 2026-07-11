@@ -204,5 +204,5 @@ async def async_get_pit_stops(
     session: aiohttp.ClientSession, session_key: int
 ) -> list[dict[str, Any]]:
     """Boxenstopps fuer eine Session."""
-    data = await _get_json(session, f"{OPENF1_BASE}/pit?session_key={session_key}")
+    data = await _get_json_with_retry(session, f"{OPENF1_BASE}/pit?session_key={session_key}")
     return data or []
