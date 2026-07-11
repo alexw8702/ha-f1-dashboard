@@ -44,6 +44,27 @@ async def _get_json(
     except aiohttp.ClientError as err:
         raise F1ApiError(f"Verbindungsfehler bei {url}: {err}") from err
 
+async def _get_json_with_retry(
+    session: aiohttp.ClientSession, url: str, *, params: dict[str, Any] | None = None
+) -> Any:
+    """Wie _get_json, aber mit einem Wiederholungsversuch bei 429/Timeout.
+
+    OpenF1 antwortet unter Last mit HTTP 429 statt sauberem Backoff-Header;
+    ein einzelner Retry nach kurzer Pause loest die meisten dieser Faelle,
+    ohne dass der komplette Rennrueckblick verworfen werden muss.
+    """
+    try:
+        return await _get_json(session, url, params=params)
+    except F1ApiError as err:
+        message = str(err)
+        is_timeout = "Timeout bei" in message
+        is_rate_limited = any(f"HTTP {code}" in message for code in _RETRYABLE_STATUS)
+        if not (is_timeout or is_rate_limited):
+            raise
+        _LOGGER.debug("Retry nach %ss fuer %s (%s)", _RETRY_DELAY, url, message)
+        await asyncio.sleep(_RETRY_DELAY)
+        return await _get_json(session, url, params=params)
+
 
 # =============================================================
 # JOLPICA-F1  (Ergast-kompatibel)
