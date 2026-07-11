@@ -5,6 +5,7 @@ Historische OpenF1-Daten (Sessions >30min beendet) sind ebenfalls frei.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
