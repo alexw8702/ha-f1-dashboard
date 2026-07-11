@@ -10,7 +10,7 @@ Formel-1-Daten für Home Assistant, komplett kostenlos ohne API-Key.
 
 > **Hinweis:** Die passenden Dashboard-Karten leben in einem separaten Repo: [**ha-f1-dashboard-card**](https://github.com/alexw8702/ha-f1-dashboard-card) (HACS-Kategorie *Dashboard/Plugin*). Beide Repos werden getrennt installiert, da HACS pro Repo nur eine Kategorie gleichzeitig verwaltet.
 >
-> **Versionsstand:** Integration `v0.3.2` · Card `v0.4.0`. Die Card wurde in v0.4.0 auf Vue 3 umgestellt und die Rennwochenende-Karte neu designt; die hier bereitgestellten Live-Timing-Sensoren (siehe unten) sind aktuell **nicht** in die neu gestaltete Session Card eingebunden, bleiben aber vollständig funktionsfähig für eigene Automationen, Templates oder Custom-Karten.
+> **Versionsstand:** Integration `v0.3.3` · Card `v0.6.0`. Die Card wurde in v0.4.0 auf Vue 3 umgestellt und die Rennwochenende-Karte neu designt; die hier bereitgestellten Live-Timing-Sensoren (siehe unten) sind aktuell **nicht** in die neu gestaltete Session Card eingebunden, bleiben aber vollständig funktionsfähig für eigene Automationen, Templates oder Custom-Karten.
 
 ---
 
@@ -22,7 +22,7 @@ Formel-1-Daten für Home Assistant, komplett kostenlos ohne API-Key.
 
 ### 🏁 Session & Rennwochenende
 - **Session-Status**: Aktuelle Session (FP1–FP3, Quali, Sprint, Rennen), Countdown zur nächsten Session
-- **Streckenfakten**: Länge, Rundenzahl, Anzahl Kurven, Aktiv-Aero-Zonen, Höhenmeter, Rundenrekord, alle 22 Strecken der 2026-Saison
+- **Rennkalender**: Nächstes Rennwochenende und die von Jolpica gelieferten Strecken- und Sessiondaten
 - **Wetter**: 4-Tages-Vorhersage + stündlicher Verlauf (Temperatur, Regen, Wind) für die Rennstrecke — nützlich für eigene Automationen; die mitgelieferte Session Card lädt ihr Wetter seit Card-v0.4.0 direkt im Frontend und benötigt diesen Sensor nicht mehr zwingend
 
 ### 🚗 Live-Timing (nur während aktiver Sessions)
@@ -93,7 +93,7 @@ cards:
     max: 10
 
   - type: custom:f1-race-recap-card
-    entity: sensor.f1_dashboard_rennrueckblick
+    entity: sensor.f1_dashboard_letztes_rennen_detail
 ```
 
 > Seit Card-v0.4.0 genügt für `f1-session-card` die reine `entity`-Angabe; Wetter wird automatisch im Frontend geladen.
@@ -108,13 +108,17 @@ Nach der Einrichtung sind folgende Sensoren verfügbar:
 |-|-|-|
 | `sensor.f1_dashboard_fahrerwertung` | Fahrer-WM | WM-Stand (JSON: Position, Punkte, Team, Teamfarbe, Nummer) |
 | `sensor.f1_dashboard_konstrukteurswertung` | Konstrukteurs-WM | Team-WM-Stand (JSON: Position, Punkte, Teamfarbe) |
+| `sensor.f1_dashboard_rennkalender` | Rennkalender | Saison, Rennwochenenden und Sessiondaten |
+| `sensor.f1_dashboard_letztes_ergebnis` | Letztes Ergebnis | Rohes Jolpica-Rennergebnis für Automationen/Templates |
+| `sensor.f1_dashboard_letztes_qualifying` | Letztes Qualifying | Rohes Jolpica-Qualifying für Automationen/Templates |
 | `sensor.f1_dashboard_session_status` | Session-Status | Aktuelle Session, Countdown, Nächste Session |
-| `sensor.f1_dashboard_streckenfakten` | Streckenfakten | Länge, Runden, Kurven, Aktiv-Aero, Höhenmeter, Rundenrekord |
-| `sensor.f1_dashboard_wetter_vorhersage` | Wetter | 4-Tage-Vorhersage + stündlich Renntag (optional, für eigene Automationen) |
+| `sensor.f1_dashboard_wetter_vorhersage` | Wetter Vorhersage | Tägliche Vorhersage am nächsten Circuit (optional, für Automationen) |
+| `sensor.f1_dashboard_wetter_stuendlich` | Wetter stündlich | Stündliche Vorhersage am nächsten Circuit (optional, für Automationen) |
 | `sensor.f1_dashboard_live_streckenstatus` | Live Track Status | (Live) Flaggenstatus, nur während Sessions — derzeit ohne Card-Anbindung |
 | `sensor.f1_dashboard_live_timing_tower` | Live Timing Tower | (Live) Alle Fahrer: Position, Gap, Rundenzeit, Box-Status — derzeit ohne Card-Anbindung |
+| `sensor.f1_dashboard_live_renn_kontrolle` | Live Renn-Kontrolle | (Live) jüngste Flaggen, Strafen und Untersuchungen — derzeit ohne Card-Anbindung |
 | `sensor.f1_dashboard_live_track_positionen` | Live Track Positionen | Echtzeitpositionen aller Fahrer (X/Y/Z), Bounds, Streckenstatus — derzeit ohne Card-Anbindung |
-| `sensor.f1_dashboard_rennrueckblick` | Rennrückblick | Endergebnis, Reifen-Strategie, Boxenstopps (24h nach Rennen verfügbar) |
+| `sensor.f1_dashboard_letztes_rennen_detail` | Letztes Rennen (Detail) | Endergebnis, Reifen-Strategie, Boxenstopps (24h nach Rennen verfügbar) |
 
 ### Attribute des `live_track_positionen`-Sensors
 
@@ -157,6 +161,10 @@ Optionen:
 ---
 
 ## Changelog
+
+### v0.3.3
+- 📚 **Sensor-Dokumentation bereinigt:** Die veröffentlichte Entitätsliste entspricht nun den tatsächlich erzeugten Sensoren. Nicht existente bzw. veraltete Namen wurden entfernt; Kalender-, Ergebnis-, Qualifying-, Wetter- und Live-Rennkontrollsensoren sind vollständig dokumentiert.
+- 🔗 **Datenvertrag vereinheitlicht:** Der Rennrückblick wird als `sensor.f1_dashboard_letztes_rennen_detail` dokumentiert und passt damit zum Standard der Frontend-Karte.
 
 ### v0.3.2
 - 🔧 **Bugfix (Lovelace Card-Kompatibilität)**: 

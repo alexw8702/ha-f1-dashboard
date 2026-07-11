@@ -252,7 +252,10 @@ class F1DashboardCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 name = f"Driver #{num}"
                 constr_id = ""
                 constr_name = "–"
-                pos = r.get("position", 0)
+                # OpenF1 liefert fuer einzelne, nicht zuordenbare Fahrer nicht
+                # immer eine Position. Diese Eintraege duerfen nicht mit 0 vor
+                # bekannte klassifizierte Fahrer einsortiert werden.
+                pos = r.get("position") or 999
 
             gap = r.get("gap_to_leader")
             if gap == 0 or gap is None:
