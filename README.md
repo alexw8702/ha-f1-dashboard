@@ -10,7 +10,7 @@ Formel-1-Daten für Home Assistant, komplett kostenlos ohne API-Key.
 
 > **Hinweis:** Die passenden Dashboard-Karten leben in einem separaten Repo: [**ha-f1-dashboard-card**](https://github.com/alexw8702/ha-f1-dashboard-card) (HACS-Kategorie *Dashboard/Plugin*). Beide Repos werden getrennt installiert, da HACS pro Repo nur eine Kategorie gleichzeitig verwaltet.
 >
-> **Versionsstand:** Integration `v0.3.1` · Card `v0.4.0`. Die Card wurde in v0.4.0 auf Vue 3 umgestellt und die Rennwochenende-Karte neu designt; die hier bereitgestellten Live-Timing-Sensoren (siehe unten) sind aktuell **nicht** in die neu gestaltete Session Card eingebunden, bleiben aber vollständig funktionsfähig für eigene Automationen, Templates oder Custom-Karten.
+> **Versionsstand:** Integration `v0.3.2` · Card `v0.4.0`. Die Card wurde in v0.4.0 auf Vue 3 umgestellt und die Rennwochenende-Karte neu designt; die hier bereitgestellten Live-Timing-Sensoren (siehe unten) sind aktuell **nicht** in die neu gestaltete Session Card eingebunden, bleiben aber vollständig funktionsfähig für eigene Automationen, Templates oder Custom-Karten.
 
 ---
 
@@ -157,6 +157,11 @@ Optionen:
 ---
 
 ## Changelog
+
+### v0.3.2
+- 🔧 **Bugfix (Lovelace Card-Kompatibilität)**: 
+  - Die Sensoren für die Fahrer- und Konstrukteurswertung befüllen nun das flache `standings`-Attribut, das von den neuen Vue-3-Karten (v0.4.0) benötigt wird, um leere Listen (0 Fahrer) zu beheben.
+  - Die Daten des Rennrückblicks (`results`, `stints`, `pit_stops`) werden nun serverseitig aufbereitet und mit den Klarnamen und Teams aus Jolpica/Ergast angereichert, um leere Tabellen und die JS-typische `"Object"`-Anzeige der Konstrukteure zu korrigieren.
 
 ### v0.3.1
 - 🔧 Kleinere Fixes und Stabilisierung der bestehenden v0.3.0-Sensoren
