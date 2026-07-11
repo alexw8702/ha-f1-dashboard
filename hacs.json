@@ -1,6 +1,4 @@
 {
-  "name": "F1 Dashboard Card",
-  "filename": "f1-dashboard-card.js",
-  "render_readme": true,
+  "name": "F1 Dashboard",
   "homeassistant": "2024.1.0"
 }
