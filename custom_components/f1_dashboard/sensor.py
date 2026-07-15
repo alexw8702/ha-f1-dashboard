@@ -397,6 +397,7 @@ class F1LiveTimingTowerSensor(_F1LiveBaseSensor):
     """Live-Positionen, Rundenzeiten und Gaps waehrend einer Session."""
 
     _attr_icon = "mdi:podium"
+    _unrecorded_attributes = frozenset({"drivers"})
 
     def __init__(self, coordinator: F1DashboardCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator, entry, "live_timing_tower", "Live Timing Tower")
@@ -431,6 +432,7 @@ class F1LiveRaceControlSensor(_F1LiveBaseSensor):
     """Juengste Renn-Kontrollnachrichten (Strafen, Untersuchungen, Flaggen)."""
 
     _attr_icon = "mdi:message-alert"
+    _unrecorded_attributes = frozenset({"messages"})
 
     def __init__(self, coordinator: F1DashboardCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator, entry, "live_race_control", "Live Renn-Kontrolle")
