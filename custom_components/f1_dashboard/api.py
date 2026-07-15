@@ -43,6 +43,8 @@ async def _get_json(
         raise F1ApiError(f"Timeout bei {url}") from err
     except aiohttp.ClientError as err:
         raise F1ApiError(f"Verbindungsfehler bei {url}: {err}") from err
+    except ValueError as err:
+        raise F1ApiError(f"Ungueltiges JSON-Format bei {url}: {err}") from err
 
 async def _get_json_with_retry(
     session: aiohttp.ClientSession, url: str, *, params: dict[str, Any] | None = None
@@ -179,7 +181,7 @@ async def async_find_race_session(
         f"&date_start>={race_date}&date_start<={race_date}T23:59:59"
     )
     data = await _get_json_with_retry(session, url)
-    if not data:
+    if not isinstance(data, list) or not data:
         return None
     return data[0]
 
@@ -189,7 +191,7 @@ async def async_get_session_result(
 ) -> list[dict[str, Any]]:
     """Endergebnis (inkl. DNF/DNS/DSQ) fuer eine Session."""
     data = await _get_json_with_retry(session, f"{OPENF1_BASE}/session_result?session_key={session_key}")
-    return data or []
+    return data if isinstance(data, list) else []
 
 
 async def async_get_stints(
@@ -197,7 +199,7 @@ async def async_get_stints(
 ) -> list[dict[str, Any]]:
     """Reifenstrategie fuer eine Session."""
     data = await _get_json_with_retry(session, f"{OPENF1_BASE}/stints?session_key={session_key}")
-    return data or []
+    return data if isinstance(data, list) else []
 
 
 async def async_get_pit_stops(
@@ -205,4 +207,4 @@ async def async_get_pit_stops(
 ) -> list[dict[str, Any]]:
     """Boxenstopps fuer eine Session."""
     data = await _get_json_with_retry(session, f"{OPENF1_BASE}/pit?session_key={session_key}")
-    return data or []
+    return data if isinstance(data, list) else []

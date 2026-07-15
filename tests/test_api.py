@@ -122,6 +122,29 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(qualifying["QualifyingResults"], [{"position": "1"}])
         self.assertEqual(empty, {})
 
+    async def test_invalid_json_payload_raises_f1_api_error(self) -> None:
+        class FakeValueErrorResponse(FakeResponse):
+            async def json(self) -> Any:
+                raise ValueError("Invalid JSON")
+
+        session = FakeSession([FakeValueErrorResponse(200, None)])
+
+        with self.assertRaises(api.F1ApiError) as ctx:
+            await api._get_json(session, "https://example.invalid")
+        self.assertIn("Ungueltiges JSON-Format", str(ctx.exception))
+
+    async def test_openf1_dictionary_response_fallback_to_safe_defaults(self) -> None:
+        session = FakeSession([
+            FakeResponse(200, {"error": "unexpected payload"}),
+            FakeResponse(200, {"error": "unexpected payload"}),
+        ])
+
+        found = await api.async_find_race_session(session, "2026", "2026-05-03")
+        results = await api.async_get_session_result(session, 42)
+
+        self.assertIsNone(found)
+        self.assertEqual(results, [])
+
 
 if __name__ == "__main__":
     unittest.main()
