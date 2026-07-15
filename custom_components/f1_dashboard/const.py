@@ -26,7 +26,7 @@ OPENF1_BASE = "https://api.openf1.org/v1"
 
 # Haelt sich absichtlich an manifest.json["version"] - wird bei jedem Release
 # mitgepflegt, siehe CLAUDE.md "Dokumentationspflege".
-USER_AGENT = "HomeAssistant-F1-Dashboard/0.4.3"
+USER_AGENT = "HomeAssistant-F1-Dashboard/0.4.4"
 
 # ---- Config-Flow-Optionen ---------------------------------------------
 CONF_ENABLE_WEATHER = "enable_weather"
