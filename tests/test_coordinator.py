@@ -201,6 +201,181 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(dt.hour, 0)
         self.assertEqual(dt.minute, 0)
 
+    async def test_last_session_uses_qualifying_when_it_is_the_most_recent_started_session(self) -> None:
+        calendar = {"Races": [{
+            "season": "2026", "raceName": "Miami GP",
+            "date": "2026-05-03", "time": "13:00:00Z",
+            "Qualifying": {"date": "2026-05-02", "time": "12:00:00Z"},
+        }]}
+        last_qualifying = {"QualifyingResults": [{
+            "position": "1", "Driver": {"code": "VER", "givenName": "Max", "familyName": "Verstappen"},
+            "Constructor": {"name": "Red Bull"}, "Q3": "1:30.000",
+        }]}
+
+        with patch.object(coordinator_module, "datetime", _FixedDateTime):
+            last_session = await self.coordinator._async_get_last_session(
+                calendar, {}, last_qualifying
+            )
+
+        self.assertEqual(last_session["session_type"], "Qualifying")
+        self.assertEqual(last_session["results"][0]["driver_code"], "VER")
+        self.assertEqual(last_session["results"][0]["time_or_gap"], "1:30.000")
+
+    async def test_last_session_uses_openf1_for_practice(self) -> None:
+        calendar = {"Races": [{
+            "season": "2026", "raceName": "Miami GP",
+            "date": "2026-05-04", "time": "13:00:00Z",
+            "FirstPractice": {"date": "2026-05-02", "time": "12:00:00Z"},
+        }]}
+        last_result = {"Results": [{
+            "number": "1", "Driver": {"code": "VER", "givenName": "Max", "familyName": "Verstappen"},
+            "Constructor": {"name": "Red Bull"},
+        }]}
+
+        with patch.object(coordinator_module, "datetime", _FixedDateTime), \
+             patch.object(api, "async_find_session", new=AsyncMock(return_value={"session_key": 9})), \
+             patch.object(api, "async_get_session_result", new=AsyncMock(return_value=[
+                 {"driver_number": 1, "position": 1, "duration": 88.123},
+             ])):
+            last_session = await self.coordinator._async_get_last_session(
+                calendar, last_result, {}
+            )
+
+        self.assertEqual(last_session["session_type"], "Practice 1")
+        self.assertEqual(last_session["results"][0]["driver_code"], "VER")
+        self.assertEqual(last_session["results"][0]["time_or_gap"], "88.123")
+
+    async def test_last_session_is_none_without_any_started_session(self) -> None:
+        calendar = {"Races": [{"date": "2026-06-01", "time": "13:00:00Z"}]}
+
+        with patch.object(coordinator_module, "datetime", _FixedDateTime):
+            last_session = await self.coordinator._async_get_last_session(calendar, {}, {})
+
+        self.assertIsNone(last_session)
+
+    GRID_CALENDAR = {"Races": [{
+        "season": "2026", "round": "6", "raceName": "Miami GP",
+        "date": "2026-05-04", "time": "13:00:00Z",
+        "Qualifying": {"date": "2026-05-02", "time": "12:00:00Z"},
+    }]}
+    GRID_LAST_QUALIFYING = {
+        "season": "2026", "round": "6", "raceName": "Miami GP",
+        "QualifyingResults": [{
+            "position": "1", "number": "1",
+            "Driver": {"code": "VER", "givenName": "Max", "familyName": "Verstappen", "driverId": "max_verstappen"},
+            "Constructor": {"name": "Red Bull"},
+        }],
+    }
+
+    async def test_starting_grid_uses_openf1_starting_grid_when_published(self) -> None:
+        # OpenF1s /starting_grid ist schon da (kurz nach dem Qualifying), obwohl das
+        # Rennen selbst noch nicht gefahren wurde - das ist trotzdem final, nicht provisorisch.
+        last_result = {"season": "2026", "round": "5"}
+        self.coordinator.live = type("L", (), {"race_control_messages": []})()
+
+        with patch.object(api, "async_find_session", new=AsyncMock(return_value={"session_key": 42})), \
+             patch.object(api, "async_get_starting_grid", new=AsyncMock(return_value=[
+                 {"driver_number": 1, "position": 4},
+             ])), \
+             patch.object(api, "async_get_race_control", new=AsyncMock(return_value=[])):
+            grid = await self.coordinator._async_build_starting_grid(
+                last_result, self.GRID_LAST_QUALIFYING, self.GRID_CALENDAR
+            )
+
+        self.assertFalse(grid["provisional"])
+        self.assertEqual(grid["grid"][0]["grid_position"], 4)
+        self.assertEqual(grid["grid"][0]["quali_position"], 1)
+        self.assertTrue(grid["grid"][0]["penalty"])
+
+    async def test_starting_grid_falls_back_to_quali_order_when_openf1_grid_not_yet_published(self) -> None:
+        last_result = {"season": "2026", "round": "5"}
+        self.coordinator.live = type("L", (), {"race_control_messages": []})()
+
+        with patch.object(api, "async_find_session", new=AsyncMock(return_value={"session_key": 42})), \
+             patch.object(api, "async_get_starting_grid", new=AsyncMock(return_value=[])), \
+             patch.object(api, "async_get_race_control", new=AsyncMock(return_value=[])):
+            grid = await self.coordinator._async_build_starting_grid(
+                last_result, self.GRID_LAST_QUALIFYING, self.GRID_CALENDAR
+            )
+
+        self.assertTrue(grid["provisional"])
+        self.assertEqual(grid["grid"][0]["grid_position"], 1)
+        self.assertEqual(grid["grid"][0]["quali_position"], 1)
+        self.assertFalse(grid["grid"][0]["penalty"])
+
+    async def test_starting_grid_prefers_race_result_once_the_race_has_run(self) -> None:
+        last_result = {
+            "season": "2026", "round": "6", "raceName": "Miami GP",
+            "Results": [{
+                "number": "1", "grid": "4",
+                "Driver": {"code": "VER", "givenName": "Max", "familyName": "Verstappen", "driverId": "max_verstappen"},
+                "Constructor": {"name": "Red Bull"},
+            }],
+        }
+        # Kein OpenF1-Mock-Patch noetig: race_ran=True nimmt den last_result-Pfad,
+        # der OpenF1 gar nicht mehr anfragt.
+        grid = await self.coordinator._async_build_starting_grid(
+            last_result, self.GRID_LAST_QUALIFYING, self.GRID_CALENDAR
+        )
+
+        self.assertFalse(grid["provisional"])
+        self.assertEqual(grid["grid"][0]["grid_position"], 4)
+        self.assertEqual(grid["grid"][0]["quali_position"], 1)
+        self.assertTrue(grid["grid"][0]["penalty"])
+
+    async def test_starting_grid_none_without_qualifying_results(self) -> None:
+        self.assertIsNone(await self.coordinator._async_build_starting_grid({}, {}, {"Races": []}))
+
+    async def test_penalty_note_from_historical_openf1_race_control_when_no_live_session(self) -> None:
+        # Niemand hat live zugehoert (leere race_control_messages) - die historische
+        # OpenF1-Race-Control-Suche (driver_number-Join, kein Rateversuch) greift trotzdem.
+        last_result = {"season": "2026", "round": "5"}
+        self.coordinator.live = type("L", (), {"race_control_messages": []})()
+
+        with patch.object(api, "async_find_session", new=AsyncMock(return_value={"session_key": 42})), \
+             patch.object(api, "async_get_starting_grid", new=AsyncMock(return_value=[])), \
+             patch.object(api, "async_get_race_control", new=AsyncMock(return_value=[
+                 {"driver_number": 1, "message": "CAR 1 (VER) GIVEN A 3-PLACE GRID PENALTY"},
+             ])):
+            grid = await self.coordinator._async_build_starting_grid(
+                last_result, self.GRID_LAST_QUALIFYING, self.GRID_CALENDAR
+            )
+
+        self.assertTrue(grid["grid"][0]["penalty"])
+        self.assertIn("GRID PENALTY", grid["grid"][0]["penalty_note"])
+
+    async def test_penalty_note_stays_none_without_a_matching_race_control_row(self) -> None:
+        last_result = {"season": "2026", "round": "5"}
+        self.coordinator.live = type("L", (), {"race_control_messages": []})()
+
+        with patch.object(api, "async_find_session", new=AsyncMock(return_value={"session_key": 42})), \
+             patch.object(api, "async_get_starting_grid", new=AsyncMock(return_value=[])), \
+             patch.object(api, "async_get_race_control", new=AsyncMock(return_value=[
+                 {"driver_number": 1, "message": "TRACK LIMITS WARNING FOR CAR 1"},
+             ])):
+            grid = await self.coordinator._async_build_starting_grid(
+                last_result, self.GRID_LAST_QUALIFYING, self.GRID_CALENDAR
+            )
+
+        self.assertFalse(grid["grid"][0]["penalty"])
+        self.assertIsNone(grid["grid"][0]["penalty_note"])
+
+    def test_live_penalty_note_matches_driver_code_and_keyword(self) -> None:
+        self.coordinator.live = type("L", (), {"race_control_messages": [
+            {"Message": "CAR 1 (VER) 5 SECOND TIME PENALTY - GRID PENALTY"},
+        ]})()
+
+        note = self.coordinator._find_live_penalty_note("VER", "Max Verstappen")
+
+        self.assertIn("PENALTY", note)
+
+    def test_live_penalty_note_is_none_without_a_matching_message(self) -> None:
+        self.coordinator.live = type("L", (), {"race_control_messages": [
+            {"Message": "TRACK LIMITS AT TURN 4 FOR CAR 44 (HAM)"},
+        ]})()
+
+        self.assertIsNone(self.coordinator._find_live_penalty_note("VER", "Max Verstappen"))
+
 
 class LiveStatusCheckTests(unittest.IsolatedAsyncioTestCase):
     """_async_check_live_status laeuft minuetlich (siehe __init__), unabhaengig vom

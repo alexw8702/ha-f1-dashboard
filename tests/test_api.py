@@ -99,6 +99,30 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(api.F1ApiError):
             await api._get_json(session, "https://example.invalid")
 
+    async def test_find_session_accepts_arbitrary_session_name(self) -> None:
+        session = FakeSession([FakeResponse(200, [{"session_key": 7}])])
+
+        found = await api.async_find_session(session, "2026", "2026-05-02", "Practice 1")
+
+        self.assertEqual(found, {"session_key": 7})
+        self.assertIn("session_name=Practice 1", session.calls[0]["url"])
+
+    async def test_starting_grid_returns_rows(self) -> None:
+        session = FakeSession([FakeResponse(200, [{"driver_number": 1, "position": 4}])])
+
+        rows = await api.async_get_starting_grid(session, 42)
+
+        self.assertEqual(rows, [{"driver_number": 1, "position": 4}])
+        self.assertIn("starting_grid?session_key=42", session.calls[0]["url"])
+
+    async def test_race_control_returns_rows(self) -> None:
+        session = FakeSession([FakeResponse(200, [{"driver_number": 1, "message": "GRID PENALTY"}])])
+
+        rows = await api.async_get_race_control(session, 42)
+
+        self.assertEqual(rows, [{"driver_number": 1, "message": "GRID PENALTY"}])
+        self.assertIn("race_control?session_key=42", session.calls[0]["url"])
+
     async def test_openf1_session_not_found_returns_none(self) -> None:
         session = FakeSession([FakeResponse(200, [])])
 

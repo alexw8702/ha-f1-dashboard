@@ -214,6 +214,49 @@ class PassthroughSensorTests(unittest.TestCase):
         self.assertEqual(sensor.native_value, 2)
 
 
+class LastSessionAndStartingGridSensorTests(unittest.TestCase):
+    def test_last_session_sensor_exposes_flat_results(self) -> None:
+        coordinator = _FakeCoordinator({
+            "last_session": {
+                "session_type": "Qualifying", "session_name": "Miami GP - Quali",
+                "date": "2026-05-02",
+                "results": [{"position": 1, "driver_code": "VER"}],
+            }
+        })
+        sensor = sensor_module.F1LastSessionSensor(coordinator, ENTRY)
+
+        self.assertEqual(sensor.native_value, "Qualifying")
+        self.assertEqual(sensor.extra_state_attributes["results"][0]["driver_code"], "VER")
+
+    def test_last_session_sensor_handles_missing_data(self) -> None:
+        coordinator = _FakeCoordinator({})
+        sensor = sensor_module.F1LastSessionSensor(coordinator, ENTRY)
+
+        self.assertIsNone(sensor.native_value)
+        self.assertEqual(sensor.extra_state_attributes["results"], [])
+
+    def test_starting_grid_sensor_exposes_provisional_flag_and_grid(self) -> None:
+        coordinator = _FakeCoordinator({
+            "starting_grid": {
+                "season": "2026", "round": "6", "raceName": "Miami GP",
+                "provisional": True,
+                "grid": [{"grid_position": 1, "quali_position": 1, "penalty": False}],
+            }
+        })
+        sensor = sensor_module.F1StartingGridSensor(coordinator, ENTRY)
+
+        self.assertEqual(sensor.native_value, "Miami GP")
+        self.assertTrue(sensor.extra_state_attributes["provisional"])
+        self.assertEqual(len(sensor.extra_state_attributes["grid"]), 1)
+
+    def test_starting_grid_sensor_handles_missing_data(self) -> None:
+        coordinator = _FakeCoordinator({"starting_grid": None})
+        sensor = sensor_module.F1StartingGridSensor(coordinator, ENTRY)
+
+        self.assertIsNone(sensor.native_value)
+        self.assertEqual(sensor.extra_state_attributes["grid"], [])
+
+
 class WeatherSensorTests(unittest.TestCase):
     def test_daily_sensor_reads_first_max_temperature(self) -> None:
         coordinator = _FakeCoordinator({

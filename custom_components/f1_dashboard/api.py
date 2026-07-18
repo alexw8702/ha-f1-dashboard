@@ -166,10 +166,10 @@ async def async_get_weather(
 # OPENF1  (historische Session-Daten: Ergebnis, Reifen, Boxenstopps)
 # =============================================================
 
-async def async_find_race_session(
-    session: aiohttp.ClientSession, year: str, race_date: str
+async def async_find_session(
+    session: aiohttp.ClientSession, year: str, session_date: str, session_name: str
 ) -> dict[str, Any] | None:
-    """Findet die OpenF1-Session fuer ein Renndatum (Jolpica-Datum).
+    """Findet eine beliebige OpenF1-Session anhand von Jahr, Datum und Sessionname.
 
     OpenF1 nutzt Vergleichsoperatoren (>=, <=) direkt als Teil des
     Query-Parameter-Namens. aiohttp's params-Dict kodiert Schluessel
@@ -177,13 +177,20 @@ async def async_find_race_session(
     wird die URL hier explizit zusammengesetzt statt ueber params=.
     """
     url = (
-        f"{OPENF1_BASE}/sessions?year={year}&session_name=Race"
-        f"&date_start>={race_date}&date_start<={race_date}T23:59:59"
+        f"{OPENF1_BASE}/sessions?year={year}&session_name={session_name}"
+        f"&date_start>={session_date}&date_start<={session_date}T23:59:59"
     )
     data = await _get_json_with_retry(session, url)
     if not isinstance(data, list) or not data:
         return None
     return data[0]
+
+
+async def async_find_race_session(
+    session: aiohttp.ClientSession, year: str, race_date: str
+) -> dict[str, Any] | None:
+    """Findet die OpenF1-Race-Session fuer ein Renndatum (Jolpica-Datum)."""
+    return await async_find_session(session, year, race_date, "Race")
 
 
 async def async_get_session_result(
@@ -207,4 +214,26 @@ async def async_get_pit_stops(
 ) -> list[dict[str, Any]]:
     """Boxenstopps fuer eine Session."""
     data = await _get_json_with_retry(session, f"{OPENF1_BASE}/pit?session_key={session_key}")
+    return data if isinstance(data, list) else []
+
+
+async def async_get_starting_grid(
+    session: aiohttp.ClientSession, session_key: int
+) -> list[dict[str, Any]]:
+    """Offizielles Startfeld (nach Strafen) fuer eine Session - laut OpenF1-Doku
+    wenige Minuten nach Veroeffentlichung der offiziellen Ergebnisse verfuegbar,
+    d.h. i.d.R. schon kurz nach dem Qualifying, nicht erst nach dem Rennen.
+    """
+    data = await _get_json_with_retry(session, f"{OPENF1_BASE}/starting_grid?session_key={session_key}")
+    return data if isinstance(data, list) else []
+
+
+async def async_get_race_control(
+    session: aiohttp.ClientSession, session_key: int
+) -> list[dict[str, Any]]:
+    """Race-Control-Nachrichten (Strafen, Flaggen, Untersuchungen) fuer eine
+    Session - historisch per session_key abrufbar, nicht nur waehrend einer
+    laufenden Session wie beim Live-SignalR-Feed (live_manager.py).
+    """
+    data = await _get_json_with_retry(session, f"{OPENF1_BASE}/race_control?session_key={session_key}")
     return data if isinstance(data, list) else []

@@ -45,6 +45,19 @@ SESSION_DEFS = [
     ("Qualifying", "Quali"),
 ]
 
+# Jolpica-Kalender-Schluessel -> (session_type-Label lt. Datenvertrag, OpenF1 session_name).
+# Qualifying/Race werden nicht ueber OpenF1 abgefragt (dafuer gibt es bereits
+# last_result/last_qualifying aus Jolpica), daher hier ohne OpenF1-Namen.
+_SESSION_TYPE_DEFS: list[tuple[str, str, str | None]] = [
+    ("FirstPractice", "Practice 1", "Practice 1"),
+    ("SecondPractice", "Practice 2", "Practice 2"),
+    ("ThirdPractice", "Practice 3", "Practice 3"),
+    ("SprintQualifying", "Sprint Qualifying", "Sprint Qualifying"),
+    ("Sprint", "Sprint", "Sprint"),
+    ("Qualifying", "Qualifying", None),
+    ("__race__", "Race", None),
+]
+
 # Die Live-Verbindung muss deutlich schneller reagieren als der stuendliche
 # Haupt-Poll-Zyklus, damit sie zeitnah zu Sessionbeginn/-ende startet/stoppt.
 _LIVE_CHECK_INTERVAL = timedelta(minutes=1)
@@ -129,6 +142,13 @@ class F1DashboardCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         result["session_status"] = self._compute_session_status(result["calendar"])
         self._cached_session_status = result["session_status"]
+
+        result["last_session"] = await self._async_get_last_session(
+            result["calendar"], result["last_result"], result["last_qualifying"]
+        )
+        result["starting_grid"] = await self._async_build_starting_grid(
+            result["last_result"], result["last_qualifying"], result["calendar"]
+        )
 
         if self._options.get(CONF_ENABLE_WEATHER, True):
             try:
@@ -250,6 +270,435 @@ class F1DashboardCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return datetime.fromisoformat(f"{date_str}T{time_part}")
         except ValueError:
             return None
+
+    # -----------------------------------------------------------
+    # Letzte/laufende Session: flaches Timing-Ergebnis fuer die Karte
+    # -----------------------------------------------------------
+    @staticmethod
+    def _driver_map_from_jolpica(last_result: dict[str, Any]) -> dict[int, dict[str, str]]:
+        """Baut eine Fahrernummer -> {code, name, team}-Zuordnung aus dem letzten
+        Jolpica-Rennergebnis. Fahrernummern sind ueber ein Rennwochenende stabil,
+        daher taugt das auch als Namens-/Team-Quelle fuer OpenF1-Sessions
+        (Practice/Sprint), die selbst keine Fahrernamen liefern.
+        """
+        driver_map: dict[int, dict[str, str]] = {}
+        for r in last_result.get("Results", []):
+            try:
+                num = int(r.get("number", -1))
+            except (ValueError, TypeError):
+                continue
+            driver = r.get("Driver", {})
+            driver_map[num] = {
+                "code": driver.get("code", ""),
+                "name": f"{driver.get('givenName', '')} {driver.get('familyName', '')}".strip(),
+                "team": r.get("Constructor", {}).get("name", ""),
+            }
+        return driver_map
+
+    async def _async_get_last_session(
+        self,
+        calendar: dict[str, Any],
+        last_result: dict[str, Any],
+        last_qualifying: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Findet die zuletzt gestartete Session (laufend oder abgeschlossen) im
+        Kalender und baut daraus ein flaches Timing-Ergebnis (Datenvertrag fuer
+        die Frontend-Karte: nie die verschachtelten Ergast/OpenF1-Formen direkt).
+        """
+        now = datetime.now(timezone.utc)
+        best: tuple[datetime, str, str, str | None, dict[str, Any]] | None = None
+        for race in calendar.get("Races", []):
+            for key, label, openf1_name in _SESSION_TYPE_DEFS:
+                sub = race if key == "__race__" else race.get(key)
+                if not sub or not sub.get("date"):
+                    continue
+                dt = self._parse_session_dt(sub["date"], sub.get("time"))
+                if dt is None or dt > now:
+                    continue
+                if best is None or dt > best[0]:
+                    best = (dt, key, label, openf1_name, race)
+
+        if best is None:
+            return None
+        dt, key, label, openf1_name, race = best
+
+        if key == "__race__":
+            results = self._reshape_race_results(last_result.get("Results", []))
+        elif key == "Qualifying":
+            results = self._reshape_qualifying_results(
+                last_qualifying.get("QualifyingResults", [])
+            )
+        else:
+            results = await self._async_get_openf1_session_results(
+                race.get("season"), dt.date().isoformat(), openf1_name, last_result
+            )
+
+        return {
+            "session_type": label,
+            "session_name": f"{race.get('raceName', '')} - {label}".strip(" -"),
+            "date": dt.date().isoformat(),
+            "results": results,
+        }
+
+    async def _async_get_openf1_session_results(
+        self, season: str | None, session_date: str, openf1_name: str, last_result: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        if not season:
+            return []
+        session_meta = await self._async_openf1_find_session_safe(season, session_date, openf1_name)
+        if not session_meta:
+            return []
+        session_key = session_meta.get("session_key")
+        if session_key is None:
+            return []
+        raw_results = await self._async_get_openf1_part(
+            api.async_get_session_result, session_key, f"Session-Ergebnis ({openf1_name})"
+        )
+        driver_map = self._driver_map_from_jolpica(last_result)
+
+        flat: list[dict[str, Any]] = []
+        for r in raw_results or []:
+            num = r.get("driver_number")
+            info = driver_map.get(num, {})
+            gap = r.get("gap_to_leader")
+            duration = r.get("duration")
+            if isinstance(gap, (int, float)) and gap != 0:
+                time_or_gap = f"+{gap:.3f}"
+            elif isinstance(duration, (int, float)):
+                time_or_gap = f"{duration:.3f}"
+            else:
+                time_or_gap = None
+            if r.get("dnf"):
+                status = "DNF"
+            elif r.get("dns"):
+                status = "DNS"
+            elif r.get("dsq"):
+                status = "DSQ"
+            else:
+                status = None
+            flat.append({
+                "position": r.get("position"),
+                "driver_code": info.get("code", ""),
+                "driver_name": info.get("name", f"#{num}" if num is not None else ""),
+                "team": info.get("team", ""),
+                "team_color": None,
+                "time_or_gap": time_or_gap,
+                "laps": None,
+                "status": status,
+            })
+        flat.sort(key=lambda x: x.get("position") if x.get("position") is not None else 999)
+        return flat
+
+    async def _async_openf1_find_session_safe(
+        self, season: str, session_date: str, openf1_name: str
+    ) -> dict[str, Any] | None:
+        try:
+            return await api.async_find_session(self._session, season, session_date, openf1_name)
+        except api.F1ApiError as err:
+            _LOGGER.warning("OpenF1-Session-Suche (%s) fehlgeschlagen: %s", openf1_name, err)
+            return None
+
+    @staticmethod
+    def _reshape_race_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        flat = []
+        for r in results:
+            driver = r.get("Driver", {})
+            time_info = r.get("Time", {})
+            status = r.get("status")
+            time_or_gap = time_info.get("time") if time_info else (status or None)
+            try:
+                laps = int(r.get("laps"))
+            except (ValueError, TypeError):
+                laps = None
+            try:
+                position = int(r.get("position"))
+            except (ValueError, TypeError):
+                position = None
+            flat.append({
+                "position": position,
+                "driver_code": driver.get("code", ""),
+                "driver_name": f"{driver.get('givenName', '')} {driver.get('familyName', '')}".strip(),
+                "team": r.get("Constructor", {}).get("name", ""),
+                "team_color": None,
+                "time_or_gap": time_or_gap,
+                "laps": laps,
+                "status": status,
+            })
+        return flat
+
+    @staticmethod
+    def _reshape_qualifying_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        flat = []
+        for r in results:
+            driver = r.get("Driver", {})
+            best_time = r.get("Q3") or r.get("Q2") or r.get("Q1")
+            try:
+                position = int(r.get("position"))
+            except (ValueError, TypeError):
+                position = None
+            flat.append({
+                "position": position,
+                "driver_code": driver.get("code", ""),
+                "driver_name": f"{driver.get('givenName', '')} {driver.get('familyName', '')}".strip(),
+                "team": r.get("Constructor", {}).get("name", ""),
+                "team_color": None,
+                "time_or_gap": best_time,
+                "laps": None,
+                "status": None,
+            })
+        return flat
+
+    # -----------------------------------------------------------
+    # Startaufstellung (mit Strafen-Kennzeichnung)
+    # -----------------------------------------------------------
+    _PENALTY_KEYWORDS = ("penalty", "grid", "startplatz")
+
+    async def _async_build_starting_grid(
+        self,
+        last_result: dict[str, Any],
+        last_qualifying: dict[str, Any],
+        calendar: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Baut die Startaufstellung fuer das aktuelle Rennwochenende.
+
+        Jolpica/Ergast veroeffentlicht das tatsaechliche Startfeld (Feld 'grid')
+        nur rueckwirkend als Teil der Rennergebnisse. Vor dem Rennen deckt OpenF1s
+        '/starting_grid'-Endpunkt (per Qualifying-session_key) die Luecke: laut
+        OpenF1-Doku ist er wenige Minuten nach Veroeffentlichung der offiziellen
+        Ergebnisse verfuegbar, also i.d.R. schon kurz nach dem Qualifying inkl.
+        etwaiger FIA-Startplatzstrafen - nicht erst nach dem Rennen. Ist auch
+        dieser Endpunkt noch leer (kurzes Zeitfenster direkt nach dem Qualifying,
+        bevor OpenF1 die Daten eingepflegt hat), bleibt die Qualifying-Reihenfolge
+        als Fallback (provisional=True).
+        """
+        quali_results = last_qualifying.get("QualifyingResults", [])
+        if not quali_results:
+            return None
+
+        quali_by_number: dict[int, dict[str, Any]] = {}
+        for q in quali_results:
+            try:
+                num = int(q.get("Driver", {}).get("permanentNumber") or q.get("number", -1))
+            except (ValueError, TypeError):
+                num = None
+            try:
+                pos = int(q.get("position"))
+            except (ValueError, TypeError):
+                continue
+            key = num if num is not None else q.get("Driver", {}).get("driverId")
+            quali_by_number[key] = {
+                "quali_position": pos,
+                "driver_code": q.get("Driver", {}).get("code", ""),
+                "driver_name": f"{q.get('Driver', {}).get('givenName', '')} {q.get('Driver', {}).get('familyName', '')}".strip(),
+                "team": q.get("Constructor", {}).get("name", ""),
+                "driver_id": q.get("Driver", {}).get("driverId"),
+                "number": num,
+            }
+
+        race_ran = (
+            last_result.get("round") is not None
+            and str(last_result.get("round")) == str(last_qualifying.get("round"))
+            and str(last_result.get("season")) == str(last_qualifying.get("season"))
+        )
+
+        if race_ran:
+            return self._build_final_starting_grid(last_result, last_qualifying, quali_by_number)
+
+        quali_session_key = await self._async_find_quali_session_key(last_qualifying, calendar)
+        penalty_notes: dict[int, str] = {}
+        grid_rows: list[dict[str, Any]] = []
+        if quali_session_key is not None:
+            grid_rows = await self._async_get_openf1_part(
+                api.async_get_starting_grid, quali_session_key, "Startaufstellung"
+            )
+            penalty_notes = await self._async_get_penalty_notes(quali_session_key)
+
+        if grid_rows:
+            return self._build_openf1_starting_grid(grid_rows, quali_by_number, penalty_notes, last_qualifying)
+
+        return self._build_provisional_starting_grid(quali_by_number, penalty_notes, last_qualifying)
+
+    async def _async_find_quali_session_key(
+        self, last_qualifying: dict[str, Any], calendar: dict[str, Any]
+    ) -> int | None:
+        """Findet den OpenF1-session_key des Qualifyings, dessen QualifyingResults
+        gerade in last_qualifying stecken (Runde+Saison-Abgleich gegen den Kalender)."""
+        season = last_qualifying.get("season")
+        round_ = last_qualifying.get("round")
+        if not season or round_ is None:
+            return None
+        for race in calendar.get("Races", []):
+            if str(race.get("round")) != str(round_) or str(race.get("season", season)) != str(season):
+                continue
+            sub = race.get("Qualifying")
+            if not sub or not sub.get("date"):
+                return None
+            dt = self._parse_session_dt(sub["date"], sub.get("time"))
+            if dt is None:
+                return None
+            session_meta = await self._async_openf1_find_session_safe(
+                str(season), dt.date().isoformat(), "Qualifying"
+            )
+            return session_meta.get("session_key") if session_meta else None
+        return None
+
+    async def _async_get_penalty_notes(self, session_key: int) -> dict[int, str]:
+        """Historische Race-Control-Nachrichten (OpenF1) fuer eine Session, gefiltert
+        auf Strafen-Stichworte und mit klarem driver_number - im Gegensatz zur
+        alten reinen Live-Textsuche ist driver_number ein strukturiertes Feld,
+        eine Zuordnung darueber ist also kein Rateversuch mehr.
+        """
+        rows = await self._async_get_openf1_part(
+            api.async_get_race_control, session_key, "Race Control (historisch)"
+        )
+        notes: dict[int, str] = {}
+        for row in rows or []:
+            num = row.get("driver_number")
+            if num is None:
+                continue
+            message = str(row.get("message", ""))
+            if not any(kw in message.lower() for kw in self._PENALTY_KEYWORDS):
+                continue
+            notes[num] = message
+        return notes
+
+    @staticmethod
+    def _build_final_starting_grid(
+        last_result: dict[str, Any],
+        last_qualifying: dict[str, Any],
+        quali_by_number: dict[int, dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Rennen bereits gefahren: 'grid' aus dem Jolpica-Rennergebnis ist die
+        garantiert authoritative Quelle - hat Vorrang vor OpenF1s '/starting_grid'."""
+        grid = []
+        for r in last_result.get("Results", []):
+            driver = r.get("Driver", {})
+            try:
+                grid_pos = int(r.get("grid"))
+            except (ValueError, TypeError):
+                grid_pos = None
+            try:
+                num = int(r.get("number", -1))
+            except (ValueError, TypeError):
+                num = None
+            quali_info = quali_by_number.get(num) or quali_by_number.get(driver.get("driverId"))
+            quali_pos = quali_info.get("quali_position") if quali_info else None
+            penalty = quali_pos is not None and grid_pos is not None and grid_pos != quali_pos
+            grid.append({
+                "grid_position": grid_pos,
+                "quali_position": quali_pos,
+                "driver_code": driver.get("code", ""),
+                "driver_name": f"{driver.get('givenName', '')} {driver.get('familyName', '')}".strip(),
+                "team": r.get("Constructor", {}).get("name", ""),
+                "penalty": penalty,
+                "penalty_note": None,
+            })
+        grid.sort(key=lambda x: x["grid_position"] if x["grid_position"] is not None else 999)
+
+        return {
+            "season": last_result.get("season"),
+            "round": last_result.get("round"),
+            "raceName": last_result.get("raceName"),
+            "provisional": False,
+            "grid": grid,
+        }
+
+    @staticmethod
+    def _build_openf1_starting_grid(
+        grid_rows: list[dict[str, Any]],
+        quali_by_number: dict[int, dict[str, Any]],
+        penalty_notes: dict[int, str],
+        last_qualifying: dict[str, Any],
+    ) -> dict[str, Any]:
+        """OpenF1 hat das offizielle (post-Strafen) Startfeld bereits veroeffentlicht,
+        obwohl das Rennen selbst noch nicht gefahren ist - das ist die finale
+        Startaufstellung, kein Ratewert mehr."""
+        grid = []
+        for row in grid_rows:
+            num = row.get("driver_number")
+            info = quali_by_number.get(num)
+            try:
+                grid_pos = int(row.get("position"))
+            except (ValueError, TypeError):
+                grid_pos = None
+            quali_pos = info.get("quali_position") if info else None
+            penalty = quali_pos is not None and grid_pos is not None and grid_pos != quali_pos
+            grid.append({
+                "grid_position": grid_pos,
+                "quali_position": quali_pos,
+                "driver_code": info.get("driver_code", "") if info else "",
+                "driver_name": info.get("driver_name", f"#{num}" if num is not None else "") if info else f"#{num}",
+                "team": info.get("team", "") if info else "",
+                "penalty": penalty,
+                "penalty_note": penalty_notes.get(num),
+            })
+        grid.sort(key=lambda x: x["grid_position"] if x["grid_position"] is not None else 999)
+
+        return {
+            "season": last_qualifying.get("season"),
+            "round": last_qualifying.get("round"),
+            "raceName": last_qualifying.get("raceName"),
+            "provisional": False,
+            "grid": grid,
+        }
+
+    def _build_provisional_starting_grid(
+        self,
+        quali_by_number: dict[int, dict[str, Any]],
+        penalty_notes: dict[int, str],
+        last_qualifying: dict[str, Any],
+    ) -> dict[str, Any]:
+        """OpenF1 hat das offizielle Startfeld noch nicht veroeffentlicht (typisches
+        Zeitfenster: wenige Minuten direkt nach dem Qualifying) - Qualifying-
+        Reihenfolge als Platzhalter, mit Strafenhinweis wo bereits bekannt (live
+        Race-Control-Feed zuerst, dann die historische OpenF1-Suche als Fallback
+        fuer den Fall, dass niemand live zugehoert hat)."""
+        grid = []
+        for info in sorted(quali_by_number.values(), key=lambda x: x["quali_position"]):
+            note = self._find_live_penalty_note(info["driver_code"], info["driver_name"])
+            if note is None:
+                note = penalty_notes.get(info.get("number"))
+            grid.append({
+                "grid_position": info["quali_position"],
+                "quali_position": info["quali_position"],
+                "driver_code": info["driver_code"],
+                "driver_name": info["driver_name"],
+                "team": info["team"],
+                "penalty": note is not None,
+                "penalty_note": note,
+            })
+        return {
+            "season": last_qualifying.get("season"),
+            "round": last_qualifying.get("round"),
+            "raceName": last_qualifying.get("raceName"),
+            "provisional": True,
+            "grid": grid,
+        }
+
+    def _find_live_penalty_note(self, driver_code: str, driver_name: str) -> str | None:
+        """Best-effort-Suche nach einer zum Fahrer passenden Strafen-Nachricht in
+        den live/zuletzt empfangenen Race-Control-Nachrichten (siehe live_manager.py).
+
+        Bewusst konservativ: nur wenn eine Nachricht sowohl ein Strafen-Stichwort
+        als auch den Fahrercode oder -nachnamen enthaelt, wird sie zugeordnet -
+        sonst liefert dies None und der Aufrufer faellt auf die historische
+        OpenF1-Race-Control-Suche zurueck (driver_number-basiert, siehe
+        _async_get_penalty_notes), die kein Rateversuch ist.
+        """
+        messages = self.live.race_control_messages
+        if not messages or not (driver_code or driver_name):
+            return None
+        last_name = driver_name.rsplit(" ", 1)[-1].lower() if driver_name else ""
+        for msg in messages:
+            text = str(msg.get("Message", ""))
+            lower = text.lower()
+            if not any(kw in lower for kw in self._PENALTY_KEYWORDS):
+                continue
+            if (driver_code and driver_code.lower() in lower) or (
+                last_name and last_name in lower
+            ):
+                return text
+        return None
 
     # -----------------------------------------------------------
     # Wetter fuer das naechste Rennen

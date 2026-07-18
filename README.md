@@ -10,7 +10,7 @@ Formel-1-Daten für Home Assistant, komplett kostenlos ohne API-Key.
 
 > **Hinweis:** Die passenden Dashboard-Karten leben in einem separaten Repo: [**ha-f1-dashboard-card**](https://github.com/alexw8702/ha-f1-dashboard-card) (HACS-Kategorie *Dashboard/Plugin*). Beide Repos werden getrennt installiert, da HACS pro Repo nur eine Kategorie gleichzeitig verwaltet.
 >
-> **Versionsstand:** Integration `v0.4.3` · Card `v0.6.0`. Die Card wurde in v0.4.0 auf Vue 3 umgestellt und die Rennwochenende-Karte neu designt; die hier bereitgestellten Live-Timing-Sensoren (siehe unten) sind aktuell **nicht** in die neu gestaltete Session Card eingebunden, bleiben aber vollständig funktionsfähig für eigene Automationen, Templates oder Custom-Karten.
+> **Versionsstand:** Integration `v0.5.0-beta.1` · Card `v0.6.4-beta.1`. Die Card wurde in v0.4.0 auf Vue 3 umgestellt und die Rennwochenende-Karte neu designt. Seit Integration v0.5.0-beta.1 / Card v0.6.4-beta.1 zeigt die Session Card eine Timing-Tabelle (aus `sensor.f1_dashboard_live_timing_tower` während einer laufenden Session, sonst aus `sensor.f1_dashboard_letzte_session`) sowie die Startaufstellung inkl. Strafen-Kennzeichnung (`sensor.f1_dashboard_startaufstellung`); `live_track_positionen` und `live_streckenstatus` bleiben weiterhin nur für eigene Automationen/Templates/Custom-Karten nutzbar, ohne eigene Darstellung in der Session Card.
 
 ---
 
@@ -119,6 +119,8 @@ Nach der Einrichtung sind folgende Sensoren verfügbar:
 | `sensor.f1_dashboard_live_renn_kontrolle` | Live Renn-Kontrolle | (Live) jüngste Flaggen, Strafen und Untersuchungen — derzeit ohne Card-Anbindung |
 | `sensor.f1_dashboard_live_track_positionen` | Live Track Positionen | Echtzeitpositionen aller Fahrer (X/Y/Z), Bounds, Streckenstatus — derzeit ohne Card-Anbindung |
 | `sensor.f1_dashboard_letztes_rennen_detail` | Letztes Rennen (Detail) | Endergebnis, Reifen-Strategie, Boxenstopps (24h nach Rennen verfügbar) |
+| `sensor.f1_dashboard_letzte_session` | Letzte Session | Timing-Ergebnis der zuletzt gestarteten (laufenden oder abgeschlossenen) Session — FP1-3/Sprint/Quali/Rennen, flach aufbereitet — derzeit ohne Card-Anbindung |
+| `sensor.f1_dashboard_startaufstellung` | Startaufstellung | Startaufstellung des aktuellen Wochenendes inkl. Strafen-Kennzeichnung; vor dem Rennen provisorisch (= Quali-Reihenfolge) — derzeit ohne Card-Anbindung |
 
 ### Attribute des `live_track_positionen`-Sensors
 
@@ -161,6 +163,12 @@ Optionen:
 ---
 
 ## Changelog
+
+### v0.5.0-beta.1
+- ✨ **Neuer Sensor `sensor.f1_dashboard_letzte_session`**: Flaches Timing-Ergebnis der zuletzt gestarteten (laufenden oder abgeschlossenen) Session eines Rennwochenendes — Training, Sprint, Qualifying oder Rennen. Qualifying/Rennen werden aus den bestehenden Jolpica-Daten aufbereitet; Training/Sprint kommen über einen neuen generischen OpenF1-Session-Lookup (`api.async_find_session`), da Jolpica/Ergast dafür keine Ergebnisse führt.
+- ✨ **Neuer Sensor `sensor.f1_dashboard_startaufstellung`**: Startaufstellung des aktuellen Rennwochenendes inkl. Strafen-Kennzeichnung (`penalty`/`penalty_note`) pro Fahrer. Nutzt jetzt OpenF1s `/starting_grid`-Endpunkt, der laut OpenF1-Doku bereits wenige Minuten nach Veröffentlichung der offiziellen Ergebnisse befüllt wird — i.d.R. schon kurz nach dem Qualifying inkl. etwaiger FIA-Startplatzstrafen, nicht erst nach dem Rennen. `provisional: true` (= reine Qualifying-Reihenfolge ohne bekannte Strafen) greift dadurch nur noch im kurzen Zeitfenster direkt nach dem Qualifying, bevor OpenF1 diese Daten eingepflegt hat; sobald das Rennen selbst gefahren wurde, hat das tatsächliche `grid`-Feld aus dem Jolpica-Rennergebnis weiterhin Vorrang als garantiert authoritative Quelle.
+- ✨ **`penalty_note` jetzt auch ohne aktive Live-Session verfügbar**: Zusätzlich zur bisherigen Live-Race-Control-Texterkennung wird jetzt OpenF1s `/race_control`-Endpunkt historisch (per `session_key`) abgefragt und über die strukturierte `driver_number` zugeordnet — kein Rateversuch mehr wie bei der reinen Freitext-Suche, funktioniert also auch, wenn niemand die Session live verfolgt hat.
+- ✅ **Testsuite erweitert** um die neue Session-Auswahl-/Grid-/Strafenerkennungs-Logik (inkl. der beiden neuen OpenF1-Endpunkte), jetzt **112 Tests**.
 
 ### v0.4.4
 - 📦 **Ausschluss hochfrequenter Attribute vom Recorder**: Die Attribute `drivers` (Timing Tower) und `messages` (Race Control) der Live-Sensoren werden nun wie auch schon `positions`/`bounds` nicht mehr in der Home Assistant SQL-Datenbank aufgezeichnet, um extremes Datenbank-Wachstum während der Sessions zu verhindern.

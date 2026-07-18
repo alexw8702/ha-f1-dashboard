@@ -35,6 +35,8 @@ async def async_setup_entry(
         F1WeatherDailySensor(coordinator, entry),
         F1WeatherHourlySensor(coordinator, entry),
         F1RaceRecapSensor(coordinator, entry),
+        F1LastSessionSensor(coordinator, entry),
+        F1StartingGridSensor(coordinator, entry),
         F1LiveTimingTowerSensor(coordinator, entry),
         F1LiveTrackStatusSensor(coordinator, entry),
         F1LiveRaceControlSensor(coordinator, entry),
@@ -341,6 +343,59 @@ class F1RaceRecapSensor(_F1BaseSensor):
             "results": recap.get("results", []),
             "stints": recap.get("stints", []),
             "pit_stops": recap.get("pit_stops", []),
+        }
+
+
+class F1LastSessionSensor(_F1BaseSensor):
+    """Timing-Ergebnis der zuletzt gestarteten Session (laufend oder abgeschlossen):
+    Practice/Sprint (OpenF1) oder Qualifying/Race (Jolpica), flach aufbereitet.
+    """
+
+    _attr_icon = "mdi:timer-outline"
+    _unrecorded_attributes = frozenset({"results"})
+
+    def __init__(self, coordinator: F1DashboardCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry, "last_session", "Letzte Session")
+
+    @property
+    def native_value(self) -> str | None:
+        return (self.coordinator.data.get("last_session") or {}).get("session_type")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        data = self.coordinator.data.get("last_session") or {}
+        return {
+            "session_type": data.get("session_type"),
+            "session_name": data.get("session_name"),
+            "date": data.get("date"),
+            "results": data.get("results", []),
+        }
+
+
+class F1StartingGridSensor(_F1BaseSensor):
+    """Startaufstellung des aktuellen Rennwochenendes, inkl. Strafen-Kennzeichnung
+    (provisorisch = Qualifying-Reihenfolge, final = tatsaechliches Rennergebnis-Grid).
+    """
+
+    _attr_icon = "mdi:grid"
+    _unrecorded_attributes = frozenset({"grid"})
+
+    def __init__(self, coordinator: F1DashboardCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry, "starting_grid", "Startaufstellung")
+
+    @property
+    def native_value(self) -> str | None:
+        return (self.coordinator.data.get("starting_grid") or {}).get("raceName")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        data = self.coordinator.data.get("starting_grid") or {}
+        return {
+            "season": data.get("season"),
+            "round": data.get("round"),
+            "raceName": data.get("raceName"),
+            "provisional": data.get("provisional"),
+            "grid": data.get("grid", []),
         }
 
 
