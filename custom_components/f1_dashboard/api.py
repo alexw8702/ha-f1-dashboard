@@ -237,3 +237,14 @@ async def async_get_race_control(
     """
     data = await _get_json_with_retry(session, f"{OPENF1_BASE}/race_control?session_key={session_key}")
     return data if isinstance(data, list) else []
+
+
+async def async_get_laps(
+    session: aiohttp.ClientSession, session_key: int
+) -> list[dict[str, Any]]:
+    """Alle Runden (inkl. Sektorzeiten) fuer eine Session - ein einziger Abruf ohne
+    driver_number-Filter liefert die Runden aller Fahrer auf einmal, daher gibt es
+    hier bewusst keinen Parameter fuer eine einzelne Fahrernummer.
+    """
+    data = await _get_json_with_retry(session, f"{OPENF1_BASE}/laps?session_key={session_key}")
+    return data if isinstance(data, list) else []

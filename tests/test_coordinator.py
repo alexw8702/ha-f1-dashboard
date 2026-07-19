@@ -34,6 +34,8 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
         self.coordinator._session = object()
         self.coordinator._cached_race_recap = None
         self.coordinator._race_recap_trigger_key = None
+        self.coordinator._cached_quali_sectors = {}
+        self.coordinator._quali_sectors_session_key = None
 
     def test_session_status_marks_active_qualifying(self) -> None:
         calendar = {"Races": [{
@@ -277,7 +279,8 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
              patch.object(api, "async_get_starting_grid", new=AsyncMock(return_value=[
                  {"driver_number": 1, "position": 4},
              ])), \
-             patch.object(api, "async_get_race_control", new=AsyncMock(return_value=[])):
+             patch.object(api, "async_get_race_control", new=AsyncMock(return_value=[])), \
+             patch.object(api, "async_get_laps", new=AsyncMock(return_value=[])):
             grid = await self.coordinator._async_build_starting_grid(
                 last_result, self.GRID_LAST_QUALIFYING, self.GRID_CALENDAR
             )
@@ -293,7 +296,8 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
 
         with patch.object(api, "async_find_session", new=AsyncMock(return_value={"session_key": 42})), \
              patch.object(api, "async_get_starting_grid", new=AsyncMock(return_value=[])), \
-             patch.object(api, "async_get_race_control", new=AsyncMock(return_value=[])):
+             patch.object(api, "async_get_race_control", new=AsyncMock(return_value=[])), \
+             patch.object(api, "async_get_laps", new=AsyncMock(return_value=[])):
             grid = await self.coordinator._async_build_starting_grid(
                 last_result, self.GRID_LAST_QUALIFYING, self.GRID_CALENDAR
             )
@@ -312,11 +316,14 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
                 "Constructor": {"name": "Red Bull"},
             }],
         }
-        # Kein OpenF1-Mock-Patch noetig: race_ran=True nimmt den last_result-Pfad,
-        # der OpenF1 gar nicht mehr anfragt.
-        grid = await self.coordinator._async_build_starting_grid(
-            last_result, self.GRID_LAST_QUALIFYING, self.GRID_CALENDAR
-        )
+        # race_ran=True nimmt fuer grid_position den last_result-Pfad statt OpenF1s
+        # /starting_grid - die Qualifying-session_key-Suche laeuft aber weiterhin, weil
+        # auch diese Tier quali_time/sector_1..3 aus OpenF1s /v1/laps bekommen soll.
+        with patch.object(api, "async_find_session", new=AsyncMock(return_value={"session_key": 42})), \
+             patch.object(api, "async_get_laps", new=AsyncMock(return_value=[])):
+            grid = await self.coordinator._async_build_starting_grid(
+                last_result, self.GRID_LAST_QUALIFYING, self.GRID_CALENDAR
+            )
 
         self.assertFalse(grid["provisional"])
         self.assertEqual(grid["grid"][0]["grid_position"], 4)
@@ -325,6 +332,94 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_starting_grid_none_without_qualifying_results(self) -> None:
         self.assertIsNone(await self.coordinator._async_build_starting_grid({}, {}, {"Races": []}))
+
+    async def test_starting_grid_attaches_quali_time_and_sectors_from_openf1_laps(self) -> None:
+        # quali_time kommt aus der bereits vorhandenen Jolpica Q3/Q2/Q1-Zuordnung,
+        # sector_1..3 sind die einzige echte Neuerung: OpenF1s /v1/laps liefert mehrere
+        # Runden je Fahrer, die schnellste gueltige (kein Boxenausfahrt, lap_duration
+        # gesetzt) gewinnt.
+        last_result = {"season": "2026", "round": "5"}
+        self.coordinator.live = type("L", (), {"race_control_messages": []})()
+        quali_with_time = {
+            **self.GRID_LAST_QUALIFYING,
+            "QualifyingResults": [{
+                **self.GRID_LAST_QUALIFYING["QualifyingResults"][0],
+                "Q3": "1:32.741",
+            }],
+        }
+
+        with patch.object(api, "async_find_session", new=AsyncMock(return_value={"session_key": 42})),              patch.object(api, "async_get_starting_grid", new=AsyncMock(return_value=[
+                 {"driver_number": 1, "position": 4},
+             ])),              patch.object(api, "async_get_race_control", new=AsyncMock(return_value=[])),              patch.object(api, "async_get_laps", new=AsyncMock(return_value=[
+                 {"driver_number": 1, "is_pit_out_lap": True, "lap_duration": 89.0,
+                  "duration_sector_1": 27.0, "duration_sector_2": 30.0, "duration_sector_3": 32.0},
+                 {"driver_number": 1, "is_pit_out_lap": False, "lap_duration": None,
+                  "duration_sector_1": 26.0, "duration_sector_2": 29.0, "duration_sector_3": 31.0},
+                 {"driver_number": 1, "is_pit_out_lap": False, "lap_duration": 92.741,
+                  "duration_sector_1": 28.421, "duration_sector_2": 31.156, "duration_sector_3": 33.164},
+                 {"driver_number": 1, "is_pit_out_lap": False, "lap_duration": 95.5,
+                  "duration_sector_1": 29.0, "duration_sector_2": 32.0, "duration_sector_3": 34.5},
+             ])):
+            grid = await self.coordinator._async_build_starting_grid(
+                last_result, quali_with_time, self.GRID_CALENDAR
+            )
+
+        row = grid["grid"][0]
+        self.assertEqual(row["quali_time"], "1:32.741")
+        self.assertEqual(row["sector_1"], "28.421")
+        self.assertEqual(row["sector_2"], "31.156")
+        self.assertEqual(row["sector_3"], "33.164")
+
+    async def test_starting_grid_sectors_are_none_when_openf1_laps_missing(self) -> None:
+        last_result = {"season": "2026", "round": "5"}
+        self.coordinator.live = type("L", (), {"race_control_messages": []})()
+
+        with patch.object(api, "async_find_session", new=AsyncMock(return_value={"session_key": 42})),              patch.object(api, "async_get_starting_grid", new=AsyncMock(return_value=[
+                 {"driver_number": 1, "position": 1},
+             ])),              patch.object(api, "async_get_race_control", new=AsyncMock(return_value=[])),              patch.object(api, "async_get_laps", new=AsyncMock(return_value=[])):
+            grid = await self.coordinator._async_build_starting_grid(
+                last_result, self.GRID_LAST_QUALIFYING, self.GRID_CALENDAR
+            )
+
+        row = grid["grid"][0]
+        self.assertIsNone(row["sector_1"])
+        self.assertIsNone(row["sector_2"])
+        self.assertIsNone(row["sector_3"])
+
+    async def test_quali_sectors_not_refetched_once_cached_for_same_session_key(self) -> None:
+        # Kein neuer /v1/laps-Abruf mehr, sobald fuer diesen quali_session_key schon
+        # erfolgreich Sektordaten im Cache stehen - siehe _async_get_quali_sectors.
+        laps_mock = AsyncMock(return_value=[
+            {"driver_number": 1, "is_pit_out_lap": False, "lap_duration": 90.0,
+             "duration_sector_1": 28.0, "duration_sector_2": 30.0, "duration_sector_3": 32.0},
+        ])
+        with patch.object(api, "async_get_laps", new=laps_mock):
+            first = await self.coordinator._async_get_quali_sectors(42)
+            second = await self.coordinator._async_get_quali_sectors(42)
+
+        self.assertEqual(first, second)
+        laps_mock.assert_called_once()
+
+    async def test_quali_sectors_refetch_when_session_key_changes(self) -> None:
+        laps_mock = AsyncMock(return_value=[
+            {"driver_number": 1, "is_pit_out_lap": False, "lap_duration": 90.0,
+             "duration_sector_1": 28.0, "duration_sector_2": 30.0, "duration_sector_3": 32.0},
+        ])
+        with patch.object(api, "async_get_laps", new=laps_mock):
+            await self.coordinator._async_get_quali_sectors(42)
+            await self.coordinator._async_get_quali_sectors(43)
+
+        self.assertEqual(laps_mock.await_count, 2)
+
+    async def test_quali_sectors_empty_response_is_not_cached_and_retries_next_cycle(self) -> None:
+        laps_mock = AsyncMock(return_value=[])
+        with patch.object(api, "async_get_laps", new=laps_mock):
+            first = await self.coordinator._async_get_quali_sectors(42)
+            second = await self.coordinator._async_get_quali_sectors(42)
+
+        self.assertEqual(first, {})
+        self.assertEqual(second, {})
+        self.assertEqual(laps_mock.await_count, 2)
 
     async def test_penalty_note_from_historical_openf1_race_control_when_no_live_session(self) -> None:
         # Niemand hat live zugehoert (leere race_control_messages) - die historische
@@ -336,7 +431,8 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
              patch.object(api, "async_get_starting_grid", new=AsyncMock(return_value=[])), \
              patch.object(api, "async_get_race_control", new=AsyncMock(return_value=[
                  {"driver_number": 1, "message": "CAR 1 (VER) GIVEN A 3-PLACE GRID PENALTY"},
-             ])):
+             ])), \
+             patch.object(api, "async_get_laps", new=AsyncMock(return_value=[])):
             grid = await self.coordinator._async_build_starting_grid(
                 last_result, self.GRID_LAST_QUALIFYING, self.GRID_CALENDAR
             )
@@ -352,7 +448,8 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
              patch.object(api, "async_get_starting_grid", new=AsyncMock(return_value=[])), \
              patch.object(api, "async_get_race_control", new=AsyncMock(return_value=[
                  {"driver_number": 1, "message": "TRACK LIMITS WARNING FOR CAR 1"},
-             ])):
+             ])), \
+             patch.object(api, "async_get_laps", new=AsyncMock(return_value=[])):
             grid = await self.coordinator._async_build_starting_grid(
                 last_result, self.GRID_LAST_QUALIFYING, self.GRID_CALENDAR
             )
@@ -449,6 +546,8 @@ class RaceRecapCachingTests(unittest.IsolatedAsyncioTestCase):
         self.coordinator._session = object()
         self.coordinator._cached_race_recap = None
         self.coordinator._race_recap_trigger_key = None
+        self.coordinator._cached_quali_sectors = {}
+        self.coordinator._quali_sectors_session_key = None
 
     LAST_RESULT = {"season": "2026", "date": "2026-05-03"}
     SESSION_STATUS_IDLE = {"state": "idle", "active_session": None}

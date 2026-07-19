@@ -86,6 +86,12 @@ class F1DashboardCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # None ist der Startwert und erzwingt beim allerersten Refresh immer einen Abruf.
         self._cached_race_recap: dict[str, Any] | None = None
         self._race_recap_trigger_key: tuple[Any, ...] | None = None
+        # Sektorzeiten (OpenF1 /v1/laps) je Qualifying-session_key: wird nur einmal
+        # erfolgreich pro session_key abgerufen und danach wiederverwendet (siehe
+        # _async_get_quali_sectors), damit ein bereits finales Startfeld nicht bei
+        # jedem stuendlichen Poll erneut die komplette Rundenliste nachlaedt.
+        self._cached_quali_sectors: dict[int, dict[str, str | None]] = {}
+        self._quali_sectors_session_key: int | None = None
         self._unsub_live_check = async_track_time_interval(
             hass, self._async_check_live_status, _LIVE_CHECK_INTERVAL
         )
@@ -488,6 +494,7 @@ class F1DashboardCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             key = num if num is not None else q.get("Driver", {}).get("driverId")
             quali_by_number[key] = {
                 "quali_position": pos,
+                "quali_time": q.get("Q3") or q.get("Q2") or q.get("Q1"),
                 "driver_code": q.get("Driver", {}).get("code", ""),
                 "driver_name": f"{q.get('Driver', {}).get('givenName', '')} {q.get('Driver', {}).get('familyName', '')}".strip(),
                 "team": q.get("Constructor", {}).get("name", ""),
@@ -501,10 +508,17 @@ class F1DashboardCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             and str(last_result.get("season")) == str(last_qualifying.get("season"))
         )
 
-        if race_ran:
-            return self._build_final_starting_grid(last_result, last_qualifying, quali_by_number)
-
+        # session_key/Sektorzeiten werden unabhaengig von race_ran ermittelt: alle drei
+        # Grid-Tiers (final/OpenF1/provisional) sollen quali_time/sector_1..3 pro Fahrer
+        # bekommen, nicht nur die beiden noch-nicht-gefahrenen Tiers.
         quali_session_key = await self._async_find_quali_session_key(last_qualifying, calendar)
+        sectors: dict[int, dict[str, str | None]] = {}
+        if quali_session_key is not None:
+            sectors = await self._async_get_quali_sectors(quali_session_key)
+
+        if race_ran:
+            return self._build_final_starting_grid(last_result, last_qualifying, quali_by_number, sectors)
+
         penalty_notes: dict[int, str] = {}
         grid_rows: list[dict[str, Any]] = []
         if quali_session_key is not None:
@@ -514,9 +528,13 @@ class F1DashboardCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             penalty_notes = await self._async_get_penalty_notes(quali_session_key)
 
         if grid_rows:
-            return self._build_openf1_starting_grid(grid_rows, quali_by_number, penalty_notes, last_qualifying)
+            return self._build_openf1_starting_grid(
+                grid_rows, quali_by_number, penalty_notes, last_qualifying, sectors
+            )
 
-        return self._build_provisional_starting_grid(quali_by_number, penalty_notes, last_qualifying)
+        return self._build_provisional_starting_grid(
+            quali_by_number, penalty_notes, last_qualifying, sectors
+        )
 
     async def _async_find_quali_session_key(
         self, last_qualifying: dict[str, Any], calendar: dict[str, Any]
@@ -562,11 +580,74 @@ class F1DashboardCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             notes[num] = message
         return notes
 
+    async def _async_get_quali_sectors(
+        self, quali_session_key: int
+    ) -> dict[int, dict[str, str | None]]:
+        """Sektorzeiten (sector_1..3) je Fahrer fuer dessen schnellste gueltige
+        Qualifying-Runde (OpenF1 '/v1/laps', ein einziger Abruf ohne driver_number-
+        Filter fuer alle Fahrer gleichzeitig - Jolpica/Ergast hat gar keine
+        Sektorzeiten). Ungueltige Runden (Boxenausfahrt, fehlende lap_duration)
+        werden ausgeschlossen, dann je Fahrer die Runde mit der kleinsten
+        lap_duration gewaehlt.
+
+        Wird pro quali_session_key nur einmal erfolgreich abgerufen und danach aus
+        self._cached_quali_sectors bedient (siehe __init__): ein bereits finales
+        Startfeld (provisional=False, Sektoren schon gefuellt) soll nicht bei jedem
+        stuendlichen Poll erneut die komplette Rundenliste der Session nachladen.
+        """
+        if (
+            self._quali_sectors_session_key == quali_session_key
+            and self._cached_quali_sectors
+        ):
+            return self._cached_quali_sectors
+
+        laps = await self._async_get_openf1_part(
+            api.async_get_laps, quali_session_key, "Rundenzeiten (Sektoren)"
+        )
+        best_duration: dict[int, float] = {}
+        sectors: dict[int, dict[str, str | None]] = {}
+        for lap in laps or []:
+            if lap.get("is_pit_out_lap"):
+                continue
+            duration = lap.get("lap_duration")
+            if not isinstance(duration, (int, float)):
+                continue
+            num = lap.get("driver_number")
+            if num is None:
+                continue
+            if num in best_duration and duration >= best_duration[num]:
+                continue
+            best_duration[num] = duration
+            sectors[num] = {
+                "sector_1": self._format_sector(lap.get("duration_sector_1")),
+                "sector_2": self._format_sector(lap.get("duration_sector_2")),
+                "sector_3": self._format_sector(lap.get("duration_sector_3")),
+            }
+
+        # Nur committen (und kuenftige Abrufe fuer diesen session_key ueberspringen),
+        # wenn tatsaechlich Sektordaten vorliegen - sonst greift beim naechsten
+        # stuendlichen Poll automatisch ein neuer Versuch, statt dauerhaft leer zu
+        # bleiben (gleiches Muster wie _async_get_race_recap_if_needed).
+        if sectors:
+            self._cached_quali_sectors = sectors
+            self._quali_sectors_session_key = quali_session_key
+        return sectors
+
+    @staticmethod
+    def _format_sector(value: Any) -> str | None:
+        """Sekunden -> 'SS.mmm'-String (drei Nachkommastellen), oder None ohne
+        gueltigen numerischen Wert - siehe quali_time/sector_1..3 im Datenvertrag
+        von sensor.f1_dashboard_startaufstellung."""
+        if not isinstance(value, (int, float)):
+            return None
+        return f"{value:.3f}"
+
     @staticmethod
     def _build_final_starting_grid(
         last_result: dict[str, Any],
         last_qualifying: dict[str, Any],
         quali_by_number: dict[int, dict[str, Any]],
+        sectors: dict[int, dict[str, str | None]],
     ) -> dict[str, Any]:
         """Rennen bereits gefahren: 'grid' aus dem Jolpica-Rennergebnis ist die
         garantiert authoritative Quelle - hat Vorrang vor OpenF1s '/starting_grid'."""
@@ -584,6 +665,7 @@ class F1DashboardCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             quali_info = quali_by_number.get(num) or quali_by_number.get(driver.get("driverId"))
             quali_pos = quali_info.get("quali_position") if quali_info else None
             penalty = quali_pos is not None and grid_pos is not None and grid_pos != quali_pos
+            driver_sectors = (sectors.get(num) if num is not None else None) or {}
             grid.append({
                 "grid_position": grid_pos,
                 "quali_position": quali_pos,
@@ -592,6 +674,10 @@ class F1DashboardCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "team": r.get("Constructor", {}).get("name", ""),
                 "penalty": penalty,
                 "penalty_note": None,
+                "quali_time": quali_info.get("quali_time") if quali_info else None,
+                "sector_1": driver_sectors.get("sector_1"),
+                "sector_2": driver_sectors.get("sector_2"),
+                "sector_3": driver_sectors.get("sector_3"),
             })
         grid.sort(key=lambda x: x["grid_position"] if x["grid_position"] is not None else 999)
 
@@ -609,6 +695,7 @@ class F1DashboardCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         quali_by_number: dict[int, dict[str, Any]],
         penalty_notes: dict[int, str],
         last_qualifying: dict[str, Any],
+        sectors: dict[int, dict[str, str | None]],
     ) -> dict[str, Any]:
         """OpenF1 hat das offizielle (post-Strafen) Startfeld bereits veroeffentlicht,
         obwohl das Rennen selbst noch nicht gefahren ist - das ist die finale
@@ -623,6 +710,7 @@ class F1DashboardCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 grid_pos = None
             quali_pos = info.get("quali_position") if info else None
             penalty = quali_pos is not None and grid_pos is not None and grid_pos != quali_pos
+            driver_sectors = (sectors.get(num) if num is not None else None) or {}
             grid.append({
                 "grid_position": grid_pos,
                 "quali_position": quali_pos,
@@ -631,6 +719,10 @@ class F1DashboardCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "team": info.get("team", "") if info else "",
                 "penalty": penalty,
                 "penalty_note": penalty_notes.get(num),
+                "quali_time": info.get("quali_time") if info else None,
+                "sector_1": driver_sectors.get("sector_1"),
+                "sector_2": driver_sectors.get("sector_2"),
+                "sector_3": driver_sectors.get("sector_3"),
             })
         grid.sort(key=lambda x: x["grid_position"] if x["grid_position"] is not None else 999)
 
@@ -647,6 +739,7 @@ class F1DashboardCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         quali_by_number: dict[int, dict[str, Any]],
         penalty_notes: dict[int, str],
         last_qualifying: dict[str, Any],
+        sectors: dict[int, dict[str, str | None]],
     ) -> dict[str, Any]:
         """OpenF1 hat das offizielle Startfeld noch nicht veroeffentlicht (typisches
         Zeitfenster: wenige Minuten direkt nach dem Qualifying) - Qualifying-
@@ -658,6 +751,7 @@ class F1DashboardCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             note = self._find_live_penalty_note(info["driver_code"], info["driver_name"])
             if note is None:
                 note = penalty_notes.get(info.get("number"))
+            driver_sectors = (sectors.get(info.get("number")) if info.get("number") is not None else None) or {}
             grid.append({
                 "grid_position": info["quali_position"],
                 "quali_position": info["quali_position"],
@@ -666,6 +760,10 @@ class F1DashboardCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "team": info["team"],
                 "penalty": note is not None,
                 "penalty_note": note,
+                "quali_time": info.get("quali_time"),
+                "sector_1": driver_sectors.get("sector_1"),
+                "sector_2": driver_sectors.get("sector_2"),
+                "sector_3": driver_sectors.get("sector_3"),
             })
         return {
             "season": last_qualifying.get("season"),

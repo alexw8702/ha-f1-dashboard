@@ -10,7 +10,7 @@ Formel-1-Daten für Home Assistant, komplett kostenlos ohne API-Key.
 
 > **Hinweis:** Die passenden Dashboard-Karten leben in einem separaten Repo: [**ha-f1-dashboard-card**](https://github.com/alexw8702/ha-f1-dashboard-card) (HACS-Kategorie *Dashboard/Plugin*). Beide Repos werden getrennt installiert, da HACS pro Repo nur eine Kategorie gleichzeitig verwaltet.
 >
-> **Versionsstand:** Integration `v0.5.0-beta.1` · Card `v0.6.4-beta.1`. Die Card wurde in v0.4.0 auf Vue 3 umgestellt und die Rennwochenende-Karte neu designt. Seit Integration v0.5.0-beta.1 / Card v0.6.4-beta.1 zeigt die Session Card eine Timing-Tabelle (aus `sensor.f1_dashboard_live_timing_tower` während einer laufenden Session, sonst aus `sensor.f1_dashboard_letzte_session`) sowie die Startaufstellung inkl. Strafen-Kennzeichnung (`sensor.f1_dashboard_startaufstellung`); `live_track_positionen` und `live_streckenstatus` bleiben weiterhin nur für eigene Automationen/Templates/Custom-Karten nutzbar, ohne eigene Darstellung in der Session Card.
+> **Versionsstand:** Integration `v0.5.0-beta.1` · Card `v0.6.5-beta.2`. Die Card wurde in v0.4.0 auf Vue 3 umgestellt und die Rennwochenende-Karte neu designt. Seit Integration v0.5.0-beta.1 / Card v0.6.5-beta.x zeigt die Session Card eine Timing-Tabelle (aus `sensor.f1_dashboard_live_timing_tower` während einer laufenden Session, sonst aus `sensor.f1_dashboard_letzte_session`) sowie die Startaufstellung inkl. Strafen-Kennzeichnung (`sensor.f1_dashboard_startaufstellung`); `live_track_positionen` und `live_streckenstatus` bleiben weiterhin nur für eigene Automationen/Templates/Custom-Karten nutzbar, ohne eigene Darstellung in der Session Card.
 
 ---
 
@@ -163,6 +163,10 @@ Optionen:
 ---
 
 ## Changelog
+
+### v0.5.0-beta.2
+- ✨ **`sensor.f1_dashboard_startaufstellung`: `quali_time` und `sector_1`/`sector_2`/`sector_3` pro Fahrer**, für die zusammengeführte Quali-/Grid-Detailansicht beim Klick auf einen Fahrer im Karten-Frontend. `quali_time` ist die bereits vorhandene beste Qualifying-Rundenzeit (Q3, sonst Q2, sonst Q1). Die Sektorzeiten gibt es bei Jolpica/Ergast gar nicht — sie kommen neu über OpenF1s `/v1/laps`-Endpunkt (ein einziger Abruf für alle Fahrer, kein Abruf pro Fahrer), gewählt wird je Fahrer die schnellste gültige Qualifying-Runde (Boxenausfahrten und Runden ohne Rundenzeit werden ausgeschlossen). Wie die Startaufstellung selbst wird auch dieser Abruf pro Qualifying-`session_key` nur einmal erfolgreich durchgeführt und danach zwischengespeichert, um nicht bei jedem stündlichen Poll erneut die komplette Rundenliste zu laden. Ohne verfügbare OpenF1-Daten bleiben die Felder `null`.
+- ✅ **Testsuite erweitert** um die neue Sektorzeiten-Logik (inkl. des neuen `/v1/laps`-Endpunkts), jetzt **119 Tests**.
 
 ### v0.5.0-beta.1
 - ✨ **Neuer Sensor `sensor.f1_dashboard_letzte_session`**: Flaches Timing-Ergebnis der zuletzt gestarteten (laufenden oder abgeschlossenen) Session eines Rennwochenendes — Training, Sprint, Qualifying oder Rennen. Qualifying/Rennen werden aus den bestehenden Jolpica-Daten aufbereitet; Training/Sprint kommen über einen neuen generischen OpenF1-Session-Lookup (`api.async_find_session`), da Jolpica/Ergast dafür keine Ergebnisse führt.

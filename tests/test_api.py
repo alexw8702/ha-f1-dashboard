@@ -123,6 +123,23 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rows, [{"driver_number": 1, "message": "GRID PENALTY"}])
         self.assertIn("race_control?session_key=42", session.calls[0]["url"])
 
+    async def test_laps_returns_rows(self) -> None:
+        session = FakeSession([FakeResponse(200, [
+            {"driver_number": 1, "lap_duration": 92.741, "duration_sector_1": 28.421},
+        ])])
+
+        rows = await api.async_get_laps(session, 42)
+
+        self.assertEqual(rows[0]["driver_number"], 1)
+        self.assertIn("laps?session_key=42", session.calls[0]["url"])
+
+    async def test_laps_returns_empty_list_on_malformed_response(self) -> None:
+        session = FakeSession([FakeResponse(200, {"unexpected": "shape"})])
+
+        rows = await api.async_get_laps(session, 42)
+
+        self.assertEqual(rows, [])
+
     async def test_openf1_session_not_found_returns_none(self) -> None:
         session = FakeSession([FakeResponse(200, [])])
 
